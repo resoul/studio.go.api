@@ -3,10 +3,12 @@ package domain
 import "errors"
 
 var (
-	ErrGroupNotFound      = errors.New("group not found")
-	ErrGroupAlreadyExists = errors.New("group already exists")
-	ErrInvalidGroupID     = errors.New("invalid group id")
-	ErrIPNotFound         = errors.New("ip not found")
-	ErrIPAlreadyExists    = errors.New("ip already exists")
-	ErrInvalidDateFormat  = errors.New("invalid date format")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrUserAlreadyExists  = errors.New("user already exists")
+	ErrUsernameTaken      = errors.New("username already exists")
+	ErrInvalidUsername    = errors.New("invalid username")
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrEmailNotVerified   = errors.New("email not verified")
+	ErrInvalidCode        = errors.New("invalid code")
+	ErrCodeExpired        = errors.New("code expired")
 )

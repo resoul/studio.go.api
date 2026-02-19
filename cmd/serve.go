@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/football.manager.api/internal/data"
@@ -41,32 +42,32 @@ func serve(cmd *cobra.Command, args []string) {
 		}
 	}()
 
-	// Data
-	groupRepo := data.NewGroupRepository(db)
-	ipRepo := data.NewIPRepository(db)
-	historyRepo := data.NewHistoryRepository(db)
-	scoreStatRepo := data.NewScoreStatRepository(db)
+	userRepo := data.NewUserRepository(db)
 
-	// Use Cases
-	groupUC := usecase.NewGroupUseCase(groupRepo, ipRepo, historyRepo, scoreStatRepo)
-	ipUC := usecase.NewIPUseCase(groupRepo, ipRepo, historyRepo)
-
-	// Handlers
-	groupHandler := handler.NewGroupHandler(groupUC, ipUC)
-
-	// Middleware
-	validTokens := cfg.Auth.GetTokens()
-	authMiddleware := infrastructure.AuthMiddleware(validTokens)
-
-	if len(validTokens) == 0 {
-		logrus.Warn("No API tokens configured. All protected endpoints will be inaccessible.")
-	} else {
-		logrus.Infof("API authentication enabled with %d token(s)", len(validTokens))
+	emailSender := infrastructure.NewLogEmailSender()
+	if strings.EqualFold(cfg.Email.Provider, "smtp") {
+		emailSender = infrastructure.NewSMTPEmailSender(
+			cfg.Email.Host,
+			cfg.Email.Port,
+			cfg.Email.Username,
+			cfg.Email.Password,
+			cfg.Email.From,
+		)
 	}
+
+	authUC := usecase.NewAuthUseCase(userRepo, emailSender)
+	userUC := usecase.NewUserUseCase(userRepo)
+	userTokenManager := infrastructure.NewUserTokenManager(cfg.Auth.JWTSecret, time.Duration(cfg.Auth.JWTTTLMinutes)*time.Minute)
+
+	authHandler := handler.NewAuthHandler(authUC, userTokenManager)
+	userHandler := handler.NewUserHandler(userUC)
+
+	userAuthMiddleware := infrastructure.UserAuthMiddleware(userTokenManager)
 
 	// Router
 	router := gin.Default()
-	handler.RegisterRoutes(router, groupHandler, authMiddleware)
+	router.Use(handler.CORSMiddleware(cfg.Server.GetCORSAllowedOrigins()))
+	handler.RegisterRoutes(router, authHandler, userHandler, userAuthMiddleware)
 
 	// Server
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)

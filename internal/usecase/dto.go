@@ -1,72 +1,39 @@
 package usecase
 
-type CreateGroupDTO struct {
-	GroupID   int
-	GroupName string
+type RegisterDTO struct {
+	Username string
+	FullName string
+	Email    string
+	Password string
 }
 
-type GroupDTO struct {
-	ID            uint
-	GroupID       int
-	GroupName     string
-	SpamTrapCount int
-	IPsCount      int
-	IPs           []IPDTO
+type LoginDTO struct {
+	Email    string
+	Password string
 }
 
-type IPDTO struct {
-	ID         uint
-	IP         string
-	Score      int
-	SpamTrap   int
-	Blocklists string
-	Complaints string
-	UpdatedAt  int64
+type VerifyEmailDTO struct {
+	Email string
+	Code  string
 }
 
-type AddIPDTO struct {
-	GroupID    int
-	GroupName  string
-	IP         string
-	Score      int
-	SpamTrap   int
-	Blocklists string
-	Complaints string
+type ResetPasswordRequestDTO struct {
+	Email string
 }
 
-type HistoryEntryDTO struct {
-	Date     string
-	Score    int
-	Volume   int
-	SpamTrap int
+type ResetPasswordDTO struct {
+	Email       string
+	Code        string
+	NewPassword string
 }
 
-type SubmitScoreDTO struct {
-	IP         string
-	Score      int
-	SpamTrap   int
-	Blocklists string
-	Complaints string
-	History    []HistoryEntryDTO
-}
-
-type SubmitScoreResultDTO struct {
-	Success        bool
-	Message        string
-	IPCreated      bool
-	GroupCreated   bool
-	HistoryAdded   int
-	HistoryUpdated int
-}
-
-type BatchIPResultDTO struct {
-	GroupsCreated int
-	IPsCreated    int
-	IPsSkipped    int
-	Message       string
-}
-
-type PaginationDTO struct {
-	Page     int
-	PageSize int
+type UserDTO struct {
+	ID              uint
+	Username        string
+	FullName        string
+	Email           string
+	EmailVerified   bool
+	EmailVerifiedAt *int64
+	CreatedAt       int64
+	UpdatedAt       int64
 }

@@ -6,10 +6,11 @@ import (
 
 func RegisterRoutes(
 	router *gin.Engine,
-	groupHandler *GroupHandler,
-	authMiddleware gin.HandlerFunc,
+	authHandler *AuthHandler,
+	userHandler *UserHandler,
+	userAuthMiddleware gin.HandlerFunc,
 ) {
-	router.GET("/health", func(c *gin.Context) {
+	router.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"status": "ok",
 		})
@@ -18,33 +19,22 @@ func RegisterRoutes(
 	// API v1
 	v1 := router.Group("/api/v1")
 	{
-		// Groups routes
-		groups := v1.Group("/groups")
+		// Auth routes
+		auth := v1.Group("/auth")
 		{
-			// Public routes
-			groups.GET("", groupHandler.ListGroups)
-			groups.GET("/:id", groupHandler.GetGroup)
-			groups.GET("/by-group-id/:group_id", groupHandler.GetGroupByGroupID)
-
-			// Protected routes
-			groups.POST("", authMiddleware, groupHandler.CreateGroup)
-			groups.POST("/by-group-id/:group_id/update-counters", authMiddleware, groupHandler.UpdateGroupCounters)
-			groups.DELETE("/by-group-id/:group_id", authMiddleware, groupHandler.DeleteGroup)
-			groups.POST("/ips", authMiddleware, groupHandler.AddIP)
-			groups.POST("/ips/batch", authMiddleware, groupHandler.AddIPs)
+			auth.POST("/registration", authHandler.Register)
+			auth.POST("/verify-email", authHandler.VerifyEmail)
+			auth.POST("/login", authHandler.Login)
+			auth.POST("/reset-password/request", authHandler.RequestResetPassword)
+			auth.POST("/reset-password/confirm", authHandler.ConfirmResetPassword)
+			auth.GET("/check", userAuthMiddleware, authHandler.CheckAuth)
 		}
 
-		// IPs routes
-		ips := v1.Group("/ips")
+		// Users routes
+		users := v1.Group("/users")
 		{
-			// Public routes
-			ips.GET("/oldest", groupHandler.GetOldestIP)
-		}
-
-		// Scores routes
-		scores := v1.Group("/scores")
-		{
-			scores.POST("/submit", authMiddleware, groupHandler.SubmitScore)
+			users.GET("/me", userAuthMiddleware, userHandler.GetMe)
+			users.GET("/:id", userHandler.GetUserByID)
 		}
 	}
 }

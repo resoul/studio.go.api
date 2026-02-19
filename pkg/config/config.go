@@ -15,6 +15,7 @@ type Config struct {
 	Logging LoggingConfig  `envconfig:"LOG"`
 	Auth    AuthConfig     `envconfig:"AUTH"`
 	Server  ServerConfig   `envconfig:"SERVER"`
+	Email   EmailConfig    `envconfig:"EMAIL"`
 }
 
 type DatabaseConfig struct {
@@ -26,11 +27,37 @@ type LoggingConfig struct {
 }
 
 type AuthConfig struct {
-	APITokens string `envconfig:"API_TOKENS" required:"false"`
+	APITokens     string `envconfig:"API_TOKENS" required:"false"`
+	JWTSecret     string `envconfig:"JWT_SECRET" default:"dev-jwt-secret-change-me"`
+	JWTTTLMinutes int    `envconfig:"JWT_TTL_MINUTES" default:"60"`
 }
 
 type ServerConfig struct {
-	Port string `envconfig:"PORT" default:"8080"`
+	Port               string `envconfig:"PORT" default:"8080"`
+	CORSAllowedOrigins string `envconfig:"CORS_ALLOWED_ORIGINS" default:"http://dashboard.manager.localhost,http://localhost:5173"`
+}
+
+type EmailConfig struct {
+	Provider string `envconfig:"PROVIDER" default:"log"`
+	From     string `envconfig:"FROM" default:"no-reply@manager.localhost"`
+	Host     string `envconfig:"HOST" default:"localhost"`
+	Port     int    `envconfig:"PORT" default:"1025"`
+	Username string `envconfig:"USERNAME" required:"false"`
+	Password string `envconfig:"PASSWORD" required:"false"`
+}
+
+func (s *ServerConfig) GetCORSAllowedOrigins() []string {
+	origins := strings.Split(s.CORSAllowedOrigins, ",")
+	result := make([]string, 0, len(origins))
+
+	for _, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			result = append(result, origin)
+		}
+	}
+
+	return result
 }
 
 func (a *AuthConfig) GetTokens() []string {

@@ -24,33 +24,12 @@ var migrateCmd = cobra.Command{
 
 		m := gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{
 			{
-				ID: "202602091900_create_base_tables",
+				ID: "202602192030_create_users_table",
 				Migrate: func(tx *gorm.DB) error {
-					if err := tx.AutoMigrate(&data.GroupModel{}); err != nil {
-						return err
-					}
-					if err := tx.AutoMigrate(&data.IPModel{}); err != nil {
-						return err
-					}
-					if err := tx.AutoMigrate(&data.GroupIPModel{}); err != nil {
-						return err
-					}
-					if err := tx.AutoMigrate(&data.HistoryModel{}); err != nil {
-						return err
-					}
-					if err := tx.AutoMigrate(&data.ScoreStatModel{}); err != nil {
-						return err
-					}
-					return nil
+					return tx.AutoMigrate(&data.UserModel{})
 				},
 				Rollback: func(tx *gorm.DB) error {
-					return tx.Migrator().DropTable(
-						"sender_score_score_stats",
-						"sender_score_histories",
-						"sender_score_group_ips",
-						"sender_score_ips",
-						"sender_score_groups",
-					)
+					return tx.Migrator().DropTable("users")
 				},
 			},
 		})
