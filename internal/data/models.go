@@ -8,6 +8,7 @@ type UserModel struct {
 	FullName               string     `gorm:"type:varchar(255);not null;default:'';comment:Full Name"`
 	Email                  string     `gorm:"type:varchar(255);uniqueIndex;not null;comment:Email"`
 	PasswordHash           string     `gorm:"type:varchar(255);not null;comment:Password Hash"`
+	Role                   string     `gorm:"type:varchar(20);not null;default:'user';comment:Role"`
 	RegistrationIP         string     `gorm:"type:varchar(45);not null;default:'';comment:Registration IP"`
 	RegistrationUserAgent  string     `gorm:"type:varchar(512);not null;default:'';comment:Registration User Agent"`
 	LoginCount             uint       `gorm:"not null;default:0;comment:Login Count"`
@@ -35,4 +36,18 @@ type UserLastLoginModel struct {
 
 func (UserLastLoginModel) TableName() string {
 	return "user_last_logins"
+}
+
+type ManagerModel struct {
+	ID        uint      `gorm:"primaryKey;comment:ID"`
+	UserID    uint      `gorm:"uniqueIndex;not null;comment:User ID"`
+	FirstName string    `gorm:"type:varchar(100);not null;comment:First Name"`
+	LastName  string    `gorm:"type:varchar(100);not null;comment:Last Name"`
+	Birthday  time.Time `gorm:"type:date;not null;comment:Birthday"`
+	CreatedAt time.Time `gorm:"autoCreateTime;comment:Created At"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime;comment:Updated At"`
+}
+
+func (ManagerModel) TableName() string {
+	return "managers"
 }

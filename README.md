@@ -32,6 +32,8 @@ AUTH_API_TOKENS=token1,token2
 # User login token config
 AUTH_JWT_SECRET=change-me-in-prod
 AUTH_JWT_TTL_MINUTES=60
+AUTH_ADMIN_EMAILS=admin@manager.localhost
+AUTH_ADMIN_ROLES=admin
 
 # Mailer (log | smtp)
 MAILER_PROVIDER=smtp
@@ -65,15 +67,21 @@ Base prefix: `/api/v1`
 
 - `POST /auth/registration`
 - `POST /auth/verify-email`
+- `POST /auth/verify-email/resend`
 - `POST /auth/login`
 - `POST /auth/reset-password/request`
 - `POST /auth/reset-password/confirm`
 - `GET /auth/check` (requires `Authorization: Bearer <token>`)
 
+### Admin Auth
+
+- `POST /admin/auth/login`
+- `GET /admin/auth/check` (requires admin `Authorization: Bearer <token>`)
+
 ### Users
 
 - `GET /users/me` (requires `Authorization: Bearer <token>`)
-- `GET /users/:id`
+- `GET /users/:id` (admin only)
 
 ## Auth Flow Example
 

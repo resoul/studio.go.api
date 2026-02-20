@@ -9,37 +9,43 @@ import (
 	"time"
 
 	"github.com/football.manager.api/internal/domain"
-	"github.com/football.manager.api/internal/infrastructure"
+	platformauth "github.com/football.manager.api/internal/platform/auth"
+	"github.com/football.manager.api/internal/platform/mailer"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthUseCase interface {
 	Register(ctx context.Context, dto RegisterDTO, ip, userAgent, locale string) (*UserDTO, error)
-	VerifyEmail(ctx context.Context, dto VerifyEmailDTO, locale string) error
-	Login(ctx context.Context, dto LoginDTO, ip, userAgent string) (*UserDTO, string, error)
+	VerifyEmail(ctx context.Context, dto VerifyEmailDTO, locale string) (*UserDTO, string, bool, error)
+	ResendVerificationCode(ctx context.Context, dto ResendVerificationDTO, locale string) error
+	Login(ctx context.Context, dto LoginDTO, ip, userAgent string) (*UserDTO, string, bool, error)
+	AdminLogin(ctx context.Context, dto LoginDTO, ip, userAgent string) (*UserDTO, string, bool, error)
 	RequestPasswordReset(ctx context.Context, dto ResetPasswordRequestDTO, locale string) error
 	ResetPassword(ctx context.Context, dto ResetPasswordDTO, locale string) error
 }
 
 type authUseCase struct {
-	userRepo    domain.UserRepository
-	tokenMngr   *infrastructure.UserTokenManager
-	emailer     infrastructure.EmailSender
-	adminEmails []string
+	userRepo          domain.UserRepository
+	managerRepo       domain.ManagerRepository
+	tokenMngr         *platformauth.UserTokenManager
+	emailer           mailer.EmailSender
+	notifyAdminEmails []string
 }
 
 func NewAuthUseCase(
 	userRepo domain.UserRepository,
-	tokenMngr *infrastructure.UserTokenManager,
-	emailer infrastructure.EmailSender,
-	adminEmails []string,
+	managerRepo domain.ManagerRepository,
+	tokenMngr *platformauth.UserTokenManager,
+	emailer mailer.EmailSender,
+	notifyAdminEmails []string,
 ) AuthUseCase {
 	return &authUseCase{
-		userRepo:    userRepo,
-		tokenMngr:   tokenMngr,
-		emailer:     emailer,
-		adminEmails: adminEmails,
+		userRepo:          userRepo,
+		managerRepo:       managerRepo,
+		tokenMngr:         tokenMngr,
+		emailer:           emailer,
+		notifyAdminEmails: notifyAdminEmails,
 	}
 }
 
@@ -98,18 +104,18 @@ func (uc *authUseCase) Register(ctx context.Context, dto RegisterDTO, ip, userAg
 	return mapUserToDTO(user), nil
 }
 
-func (uc *authUseCase) VerifyEmail(ctx context.Context, dto VerifyEmailDTO, locale string) error {
+func (uc *authUseCase) VerifyEmail(ctx context.Context, dto VerifyEmailDTO, locale string) (*UserDTO, string, bool, error) {
 	user, err := uc.userRepo.GetByEmail(ctx, strings.TrimSpace(strings.ToLower(dto.Email)))
 	if err != nil {
-		return err
+		return nil, "", false, err
 	}
 
 	if user.VerificationCode != dto.Code {
-		return domain.ErrInvalidCode
+		return nil, "", false, domain.ErrInvalidCode
 	}
 
 	if user.VerificationExpiresAt == nil || time.Now().UTC().After(*user.VerificationExpiresAt) {
-		return domain.ErrCodeExpired
+		return nil, "", false, domain.ErrCodeExpired
 	}
 
 	now := time.Now().UTC()
@@ -117,47 +123,121 @@ func (uc *authUseCase) VerifyEmail(ctx context.Context, dto VerifyEmailDTO, loca
 	user.VerificationCode = ""
 	user.VerificationExpiresAt = nil
 	if err := uc.userRepo.Update(ctx, user); err != nil {
-		return err
+		return nil, "", false, err
 	}
 
 	successEmail, err := emailVerifiedSuccessEmail(locale, user.FullName)
 	if err != nil {
-		return fmt.Errorf("failed to render verified email: %w", err)
+		return nil, "", false, fmt.Errorf("failed to render verified email: %w", err)
 	}
-	return uc.emailer.Send(ctx, user.Email, successEmail.Subject, successEmail.TextBody, successEmail.HTMLBody)
+	if err := uc.emailer.Send(ctx, user.Email, successEmail.Subject, successEmail.TextBody, successEmail.HTMLBody); err != nil {
+		return nil, "", false, err
+	}
+
+	tokenRole := platformauth.RoleUser
+	if user.Role == platformauth.RoleAdmin {
+		tokenRole = platformauth.RoleAdmin
+	}
+
+	token, err := uc.tokenMngr.Generate(user.ID, tokenRole)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	managerExists, err := uc.managerRepo.ExistsByUserID(ctx, user.ID)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("failed to check onboarding status: %w", err)
+	}
+
+	return mapUserToDTO(user), token, !managerExists, nil
 }
 
-func (uc *authUseCase) Login(ctx context.Context, dto LoginDTO, ip, userAgent string) (*UserDTO, string, error) {
+func (uc *authUseCase) ResendVerificationCode(ctx context.Context, dto ResendVerificationDTO, locale string) error {
 	user, err := uc.userRepo.GetByEmail(ctx, strings.TrimSpace(strings.ToLower(dto.Email)))
 	if err != nil {
 		if err == domain.ErrUserNotFound {
-			return nil, "", domain.ErrInvalidCredentials
+			return nil
 		}
-		return nil, "", err
+		return err
+	}
+
+	if user.EmailVerifiedAt != nil {
+		return nil
+	}
+
+	code, err := generateCode(6)
+	if err != nil {
+		return err
+	}
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	user.VerificationCode = code
+	user.VerificationExpiresAt = &expiresAt
+
+	if err := uc.userRepo.Update(ctx, user); err != nil {
+		return err
+	}
+
+	verifyEmail, err := registrationCodeEmail(locale, user.FullName, code, expiresAt)
+	if err != nil {
+		return fmt.Errorf("failed to render registration email: %w", err)
+	}
+
+	return uc.emailer.Send(ctx, user.Email, verifyEmail.Subject, verifyEmail.TextBody, verifyEmail.HTMLBody)
+}
+
+func (uc *authUseCase) Login(ctx context.Context, dto LoginDTO, ip, userAgent string) (*UserDTO, string, bool, error) {
+	return uc.login(ctx, dto, ip, userAgent, false)
+}
+
+func (uc *authUseCase) AdminLogin(ctx context.Context, dto LoginDTO, ip, userAgent string) (*UserDTO, string, bool, error) {
+	return uc.login(ctx, dto, ip, userAgent, true)
+}
+
+func (uc *authUseCase) login(ctx context.Context, dto LoginDTO, ip, userAgent string, requireAdmin bool) (*UserDTO, string, bool, error) {
+	user, err := uc.userRepo.GetByEmail(ctx, strings.TrimSpace(strings.ToLower(dto.Email)))
+	if err != nil {
+		if err == domain.ErrUserNotFound {
+			return nil, "", false, domain.ErrInvalidCredentials
+		}
+		return nil, "", false, err
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(dto.Password)); err != nil {
-		return nil, "", domain.ErrInvalidCredentials
+		return nil, "", false, domain.ErrInvalidCredentials
 	}
 
 	if user.EmailVerifiedAt == nil {
-		return nil, "", domain.ErrEmailNotVerified
+		return nil, "", false, domain.ErrEmailNotVerified
 	}
 
-	token, err := uc.tokenMngr.Generate(user.ID)
+	tokenRole := platformauth.RoleUser
+	if user.Role == platformauth.RoleAdmin {
+		tokenRole = platformauth.RoleAdmin
+	}
+
+	if requireAdmin && tokenRole != platformauth.RoleAdmin {
+		return nil, "", false, domain.ErrAdminAccessDenied
+	}
+
+	token, err := uc.tokenMngr.Generate(user.ID, tokenRole)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to generate token: %w", err)
+		return nil, "", false, fmt.Errorf("failed to generate token: %w", err)
 	}
 
 	user.LoginCount++
 	if err := uc.userRepo.Update(ctx, user); err != nil {
-		return nil, "", fmt.Errorf("failed to update login metadata: %w", err)
+		return nil, "", false, fmt.Errorf("failed to update login metadata: %w", err)
 	}
 	if err := uc.userRepo.UpdateLastLogin(ctx, user.ID, sanitizeIP(ip), sanitizeUserAgent(userAgent)); err != nil {
-		return nil, "", fmt.Errorf("failed to save last login data: %w", err)
+		return nil, "", false, fmt.Errorf("failed to save last login data: %w", err)
 	}
 
-	return mapUserToDTO(user), token, nil
+	managerExists, err := uc.managerRepo.ExistsByUserID(ctx, user.ID)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("failed to check onboarding status: %w", err)
+	}
+
+	return mapUserToDTO(user), token, !managerExists, nil
 }
 
 func (uc *authUseCase) RequestPasswordReset(ctx context.Context, dto ResetPasswordRequestDTO, locale string) error {
@@ -276,7 +356,7 @@ func sanitizeUserAgent(userAgent string) string {
 }
 
 func (uc *authUseCase) notifyAdminsAboutRegistration(ctx context.Context, user *domain.User, ip, userAgent, locale string) error {
-	if len(uc.adminEmails) == 0 {
+	if len(uc.notifyAdminEmails) == 0 {
 		return nil
 	}
 
@@ -284,7 +364,7 @@ func (uc *authUseCase) notifyAdminsAboutRegistration(ctx context.Context, user *
 	if err != nil {
 		return fmt.Errorf("failed to render admin email: %w", err)
 	}
-	for _, to := range uc.adminEmails {
+	for _, to := range uc.notifyAdminEmails {
 		if err := uc.emailer.Send(ctx, to, adminEmail.Subject, adminEmail.TextBody, adminEmail.HTMLBody); err != nil {
 			return fmt.Errorf("failed to notify admin %s: %w", to, err)
 		}

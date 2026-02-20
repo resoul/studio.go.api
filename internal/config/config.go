@@ -31,11 +31,12 @@ type AuthConfig struct {
 	APITokens     string `envconfig:"API_TOKENS" required:"false"`
 	JWTSecret     string `envconfig:"JWT_SECRET" default:"dev-jwt-secret-change-me"`
 	JWTTTLMinutes int    `envconfig:"JWT_TTL_MINUTES" default:"60"`
+	AdminRoles    string `envconfig:"ADMIN_ROLES" default:"admin"`
 }
 
 type ServerConfig struct {
 	Port               string `envconfig:"PORT" default:"8080"`
-	CORSAllowedOrigins string `envconfig:"CORS_ALLOWED_ORIGINS" default:"http://dashboard.manager.localhost,http://localhost:5173"`
+	CORSAllowedOrigins string `envconfig:"CORS_ALLOWED_ORIGINS" default:"http://admin.fm.localhost,http://dashboard.fm.localhost,http://localhost:5173"`
 }
 
 type MailerConfig struct {
@@ -78,6 +79,25 @@ func (a *AuthConfig) GetTokens() []string {
 		}
 	}
 
+	return result
+}
+
+func (a *AuthConfig) GetAdminRoles() []string {
+	if a.AdminRoles == "" {
+		return []string{"admin"}
+	}
+
+	roles := strings.Split(a.AdminRoles, ",")
+	result := make([]string, 0, len(roles))
+	for _, role := range roles {
+		role = strings.TrimSpace(strings.ToLower(role))
+		if role != "" {
+			result = append(result, role)
+		}
+	}
+	if len(result) == 0 {
+		return []string{"admin"}
+	}
 	return result
 }
 

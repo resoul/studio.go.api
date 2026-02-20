@@ -1,4 +1,4 @@
-package infrastructure
+package auth
 
 import (
 	"crypto/hmac"
@@ -16,9 +16,15 @@ type UserTokenManager struct {
 	ttl    time.Duration
 }
 
-type userTokenClaims struct {
-	UserID uint  `json:"uid"`
-	Exp    int64 `json:"exp"`
+const (
+	RoleUser  = "user"
+	RoleAdmin = "admin"
+)
+
+type UserTokenClaims struct {
+	UserID uint   `json:"uid"`
+	Role   string `json:"role"`
+	Exp    int64  `json:"exp"`
 }
 
 func NewUserTokenManager(secret string, ttl time.Duration) *UserTokenManager {
@@ -28,9 +34,15 @@ func NewUserTokenManager(secret string, ttl time.Duration) *UserTokenManager {
 	}
 }
 
-func (m *UserTokenManager) Generate(userID uint) (string, error) {
-	claims := userTokenClaims{
+func (m *UserTokenManager) Generate(userID uint, role string) (string, error) {
+	role = strings.TrimSpace(strings.ToLower(role))
+	if role == "" {
+		return "", fmt.Errorf("invalid token role")
+	}
+
+	claims := UserTokenClaims{
 		UserID: userID,
+		Role:   role,
 		Exp:    time.Now().UTC().Add(m.ttl).Unix(),
 	}
 
@@ -46,10 +58,10 @@ func (m *UserTokenManager) Generate(userID uint) (string, error) {
 	return encodedPayload + "." + encodedSignature, nil
 }
 
-func (m *UserTokenManager) Parse(token string) (uint, error) {
+func (m *UserTokenManager) Parse(token string) (*UserTokenClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
-		return 0, fmt.Errorf("invalid token format")
+		return nil, fmt.Errorf("invalid token format")
 	}
 
 	payloadPart := parts[0]
@@ -58,32 +70,36 @@ func (m *UserTokenManager) Parse(token string) (uint, error) {
 	expectedSig := m.sign(payloadPart)
 	givenSig, err := base64.RawURLEncoding.DecodeString(signaturePart)
 	if err != nil {
-		return 0, fmt.Errorf("invalid token signature")
+		return nil, fmt.Errorf("invalid token signature")
 	}
 
 	if subtle.ConstantTimeCompare(expectedSig, givenSig) != 1 {
-		return 0, fmt.Errorf("invalid token signature")
+		return nil, fmt.Errorf("invalid token signature")
 	}
 
 	payload, err := base64.RawURLEncoding.DecodeString(payloadPart)
 	if err != nil {
-		return 0, fmt.Errorf("invalid token payload")
+		return nil, fmt.Errorf("invalid token payload")
 	}
 
-	var claims userTokenClaims
+	var claims UserTokenClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return 0, fmt.Errorf("invalid token claims")
+		return nil, fmt.Errorf("invalid token claims")
 	}
 
 	if claims.UserID == 0 {
-		return 0, fmt.Errorf("invalid token user")
+		return nil, fmt.Errorf("invalid token user")
+	}
+
+	if claims.Role == "" {
+		return nil, fmt.Errorf("invalid token role")
 	}
 
 	if time.Now().UTC().Unix() > claims.Exp {
-		return 0, fmt.Errorf("token expired")
+		return nil, fmt.Errorf("token expired")
 	}
 
-	return claims.UserID, nil
+	return &claims, nil
 }
 
 func (m *UserTokenManager) sign(payload string) []byte {

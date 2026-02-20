@@ -1,9 +1,9 @@
 package cmd
 
 import (
+	"github.com/football.manager.api/internal/config"
 	"github.com/football.manager.api/internal/data"
-	"github.com/football.manager.api/internal/infrastructure"
-	"github.com/football.manager.api/pkg/config"
+	platformdb "github.com/football.manager.api/internal/platform/db"
 	"github.com/go-gormigrate/gormigrate/v2"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -17,89 +17,19 @@ var migrateCmd = cobra.Command{
 		ctx := cmd.Context()
 		cfg := config.Init(ctx)
 
-		db, err := infrastructure.NewDatabase(cfg.DB.DSN)
+		db, err := platformdb.NewDatabase(cfg.DB.DSN)
 		if err != nil {
 			logrus.WithError(err).Fatal("Failed to connect to database")
 		}
 
 		m := gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{
 			{
-				ID: "202602192030_create_users_table",
+				ID: "202602192030_create_tables",
 				Migrate: func(tx *gorm.DB) error {
-					return tx.AutoMigrate(&data.UserModel{})
+					return tx.AutoMigrate(&data.UserModel{}, &data.UserLastLoginModel{}, &data.ManagerModel{})
 				},
 				Rollback: func(tx *gorm.DB) error {
-					return tx.Migrator().DropTable("users")
-				},
-			},
-			{
-				ID: "202602201200_add_user_client_metadata",
-				Migrate: func(tx *gorm.DB) error {
-					cols := []string{
-						"RegistrationIP",
-						"RegistrationUserAgent",
-						"LoginCount",
-					}
-					for _, col := range cols {
-						if tx.Migrator().HasColumn(&data.UserModel{}, col) {
-							continue
-						}
-						if err := tx.Migrator().AddColumn(&data.UserModel{}, col); err != nil {
-							return err
-						}
-					}
-					return nil
-				},
-				Rollback: func(tx *gorm.DB) error {
-					cols := []string{
-						"RegistrationIP",
-						"RegistrationUserAgent",
-						"LoginCount",
-					}
-					for _, col := range cols {
-						if !tx.Migrator().HasColumn(&data.UserModel{}, col) {
-							continue
-						}
-						if err := tx.Migrator().DropColumn(&data.UserModel{}, col); err != nil {
-							return err
-						}
-					}
-					return nil
-				},
-			},
-			{
-				ID: "202602201430_move_last_login_to_separate_table",
-				Migrate: func(tx *gorm.DB) error {
-					if err := tx.AutoMigrate(&data.UserLastLoginModel{}); err != nil {
-						return err
-					}
-
-					statements := []string{
-						"ALTER TABLE users DROP COLUMN IF EXISTS last_login_at",
-						"ALTER TABLE users DROP COLUMN IF EXISTS last_login_ip",
-						"ALTER TABLE users DROP COLUMN IF EXISTS last_login_user_agent",
-					}
-					for _, stmt := range statements {
-						if err := tx.Exec(stmt).Error; err != nil {
-							return err
-						}
-					}
-
-					return nil
-				},
-				Rollback: func(tx *gorm.DB) error {
-					statements := []string{
-						"ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP NULL",
-						"ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip VARCHAR(45) NOT NULL DEFAULT ''",
-						"ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_user_agent VARCHAR(512) NOT NULL DEFAULT ''",
-					}
-					for _, stmt := range statements {
-						if err := tx.Exec(stmt).Error; err != nil {
-							return err
-						}
-					}
-
-					return tx.Migrator().DropTable(&data.UserLastLoginModel{})
+					return tx.Migrator().DropTable("users", "user_last_logins", "managers")
 				},
 			},
 		})

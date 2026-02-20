@@ -8,6 +8,7 @@ type User struct {
 	FullName               string
 	Email                  string
 	PasswordHash           string
+	Role                   string
 	RegistrationIP         string
 	RegistrationUserAgent  string
 	LoginCount             uint
@@ -18,4 +19,14 @@ type User struct {
 	ResetPasswordExpiresAt *time.Time
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
+}
+
+type Manager struct {
+	ID        uint
+	UserID    uint
+	FirstName string
+	LastName  string
+	Birthday  time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

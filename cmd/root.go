@@ -15,6 +15,6 @@ var (
 
 func RootCommand(wg *sync.WaitGroup) *cobra.Command {
 	mainWG = wg
-	rootCmd.AddCommand(&serveCmd, &migrateCmd)
+	rootCmd.AddCommand(&serveCmd, &migrateCmd, &adminCreateCmd)
 	return &rootCmd
 }

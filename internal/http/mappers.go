@@ -19,6 +19,12 @@ func toVerifyEmailDTO(req VerifyEmailRequest) usecase.VerifyEmailDTO {
 	}
 }
 
+func toResendVerificationDTO(req ResetPasswordRequest) usecase.ResendVerificationDTO {
+	return usecase.ResendVerificationDTO{
+		Email: req.Email,
+	}
+}
+
 func toLoginDTO(req LoginRequest) usecase.LoginDTO {
 	return usecase.LoginDTO{
 		Email:    req.Email,
@@ -40,6 +46,14 @@ func toResetPasswordDTO(req ConfirmResetPasswordRequest) usecase.ResetPasswordDT
 	}
 }
 
+func toCreateManagerDTO(req CreateManagerRequest) usecase.CreateManagerDTO {
+	return usecase.CreateManagerDTO{
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+		Birthday:  req.Birthday,
+	}
+}
+
 func toUserResponse(dto *usecase.UserDTO) UserResponse {
 	if dto == nil {
 		return UserResponse{}
@@ -53,5 +67,21 @@ func toUserResponse(dto *usecase.UserDTO) UserResponse {
 		EmailVerifiedAt: dto.EmailVerifiedAt,
 		CreatedAt:       dto.CreatedAt,
 		UpdatedAt:       dto.UpdatedAt,
+	}
+}
+
+func toManagerResponse(dto *usecase.ManagerDTO) ManagerResponse {
+	if dto == nil {
+		return ManagerResponse{}
+	}
+
+	return ManagerResponse{
+		ID:        dto.ID,
+		UserID:    dto.UserID,
+		FirstName: dto.FirstName,
+		LastName:  dto.LastName,
+		Birthday:  dto.Birthday,
+		CreatedAt: dto.CreatedAt,
+		UpdatedAt: dto.UpdatedAt,
 	}
 }

@@ -14,6 +14,7 @@ func toUserDomain(model *UserModel) *domain.User {
 		FullName:               model.FullName,
 		Email:                  model.Email,
 		PasswordHash:           model.PasswordHash,
+		Role:                   model.Role,
 		RegistrationIP:         model.RegistrationIP,
 		RegistrationUserAgent:  model.RegistrationUserAgent,
 		LoginCount:             model.LoginCount,
@@ -37,6 +38,7 @@ func toUserModel(entity *domain.User) *UserModel {
 		FullName:               entity.FullName,
 		Email:                  entity.Email,
 		PasswordHash:           entity.PasswordHash,
+		Role:                   entity.Role,
 		RegistrationIP:         entity.RegistrationIP,
 		RegistrationUserAgent:  entity.RegistrationUserAgent,
 		LoginCount:             entity.LoginCount,
@@ -47,5 +49,35 @@ func toUserModel(entity *domain.User) *UserModel {
 		ResetPasswordExpiresAt: entity.ResetPasswordExpiresAt,
 		CreatedAt:              entity.CreatedAt,
 		UpdatedAt:              entity.UpdatedAt,
+	}
+}
+
+func toManagerDomain(model *ManagerModel) *domain.Manager {
+	if model == nil {
+		return nil
+	}
+	return &domain.Manager{
+		ID:        model.ID,
+		UserID:    model.UserID,
+		FirstName: model.FirstName,
+		LastName:  model.LastName,
+		Birthday:  model.Birthday,
+		CreatedAt: model.CreatedAt,
+		UpdatedAt: model.UpdatedAt,
+	}
+}
+
+func toManagerModel(entity *domain.Manager) *ManagerModel {
+	if entity == nil {
+		return nil
+	}
+	return &ManagerModel{
+		ID:        entity.ID,
+		UserID:    entity.UserID,
+		FirstName: entity.FirstName,
+		LastName:  entity.LastName,
+		Birthday:  entity.Birthday,
+		CreatedAt: entity.CreatedAt,
+		UpdatedAt: entity.UpdatedAt,
 	}
 }

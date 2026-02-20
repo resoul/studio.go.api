@@ -4,14 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/football.manager.api/internal/data"
+	"github.com/football.manager.api/internal/app"
 	handler "github.com/football.manager.api/internal/http"
-	"github.com/football.manager.api/internal/infrastructure"
-	"github.com/football.manager.api/internal/usecase"
-	"github.com/football.manager.api/pkg/config"
+	"github.com/football.manager.api/internal/platform/httpx"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -27,51 +24,30 @@ var serveCmd = cobra.Command{
 
 func serve(cmd *cobra.Command, args []string) {
 	ctx := cmd.Context()
-	cfg := config.Init(ctx)
-
-	// Database
-	db, err := infrastructure.NewDatabase(cfg.DB.DSN)
+	container, err := app.NewContainer(ctx)
 	if err != nil {
-		logrus.WithError(err).Fatal("Failed to connect to database")
+		logrus.WithError(err).Fatal("Failed to build app container")
 	}
-
-	sqlDB, _ := db.DB()
 	defer func() {
-		if err := sqlDB.Close(); err != nil {
+		if err := container.Close(); err != nil {
 			logrus.WithError(err).Error("Error closing database")
 		}
 	}()
 
-	userRepo := data.NewUserRepository(db)
-
-	emailSender := infrastructure.NewLogEmailSender()
-	if strings.EqualFold(cfg.Mailer.Provider, "smtp") {
-		emailSender = infrastructure.NewSMTPEmailSender(
-			cfg.Mailer.Host,
-			cfg.Mailer.Port,
-			cfg.Mailer.Username,
-			cfg.Mailer.Password,
-			cfg.Mailer.From,
-			cfg.Mailer.LogoPath,
-		)
-	}
-
-	userTokenManager := infrastructure.NewUserTokenManager(cfg.Auth.JWTSecret, time.Duration(cfg.Auth.JWTTTLMinutes)*time.Minute)
-	authUC := usecase.NewAuthUseCase(userRepo, userTokenManager, emailSender, cfg.Mailer.GetAdminEmails())
-	userUC := usecase.NewUserUseCase(userRepo)
-
-	authHandler := handler.NewAuthHandler(authUC)
-	userHandler := handler.NewUserHandler(userUC)
-
-	userAuthMiddleware := infrastructure.UserAuthMiddleware(userTokenManager)
-
 	// Router
 	router := gin.Default()
-	router.Use(handler.CORSMiddleware(cfg.Server.GetCORSAllowedOrigins()))
-	handler.RegisterRoutes(router, authHandler, userHandler, userAuthMiddleware)
+	router.Use(httpx.CORSMiddleware(container.Config.Server.GetCORSAllowedOrigins()))
+	handler.RegisterRoutes(
+		router,
+		container.AuthHandler,
+		container.UserHandler,
+		container.ManagerHandler,
+		container.UserAuthMiddleware,
+		container.AdminAuthMiddleware,
+	)
 
 	// Server
-	addr := fmt.Sprintf(":%s", cfg.Server.Port)
+	addr := fmt.Sprintf(":%s", container.Config.Server.Port)
 	server := &http.Server{
 		Addr:         addr,
 		Handler:      router,

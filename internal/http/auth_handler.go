@@ -4,7 +4,8 @@ import (
 	"net/http"
 
 	"github.com/football.manager.api/internal/domain"
-	"github.com/football.manager.api/internal/infrastructure"
+	platformauth "github.com/football.manager.api/internal/platform/auth"
+	"github.com/football.manager.api/internal/platform/httpx"
 	"github.com/football.manager.api/internal/usecase"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -23,30 +24,30 @@ func NewAuthHandler(authUC usecase.AuthUseCase) *AuthHandler {
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		httpx.RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
 	user, err := h.authUC.Register(c.Request.Context(), toRegisterDTO(req), c.ClientIP(), c.Request.UserAgent(), getLocale(c))
 	if err != nil {
 		if err == domain.ErrUserAlreadyExists {
-			c.JSON(http.StatusConflict, ErrorResponse{Error: "user_exists", Message: "User with this email already exists"})
+			httpx.RespondError(c, http.StatusConflict, "user_exists", "User with this email already exists")
 			return
 		}
 		if err == domain.ErrUsernameTaken {
-			c.JSON(http.StatusConflict, ErrorResponse{Error: "username_exists", Message: "User with this username already exists"})
+			httpx.RespondError(c, http.StatusConflict, "username_exists", "User with this username already exists")
 			return
 		}
 		if err == domain.ErrInvalidUsername {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_username", Message: "Username must be 3-32 chars and contain only a-z, 0-9, dot, dash or underscore"})
+			httpx.RespondError(c, http.StatusBadRequest, "invalid_username", "Username must be 3-32 chars and contain only a-z, 0-9, dot, dash or underscore")
 			return
 		}
 		logrus.WithError(err).Error("Failed to register user")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "internal_error", Message: "Failed to register user"})
+		httpx.RespondError(c, http.StatusInternalServerError, "internal_error", "Failed to register user")
 		return
 	}
 
-	c.JSON(http.StatusCreated, AuthSuccessResponse{
+	httpx.RespondCreated(c, AuthSuccessResponse{
 		Message: "Registration successful. Check email for verification code",
 		User:    toUserResponse(user),
 	})
@@ -55,54 +56,108 @@ func (h *AuthHandler) Register(c *gin.Context) {
 func (h *AuthHandler) VerifyEmail(c *gin.Context) {
 	var req VerifyEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		httpx.RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
-	err := h.authUC.VerifyEmail(c.Request.Context(), toVerifyEmailDTO(req), getLocale(c))
+	user, token, onboardingRequired, err := h.authUC.VerifyEmail(c.Request.Context(), toVerifyEmailDTO(req), getLocale(c))
 	if err != nil {
 		switch err {
 		case domain.ErrUserNotFound:
-			c.JSON(http.StatusNotFound, ErrorResponse{Error: "not_found", Message: "User not found"})
+			httpx.RespondError(c, http.StatusNotFound, "not_found", "User not found")
 		case domain.ErrInvalidCode:
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_code", Message: "Verification code is invalid"})
+			httpx.RespondError(c, http.StatusBadRequest, "invalid_code", "Verification code is invalid")
 		case domain.ErrCodeExpired:
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "code_expired", Message: "Verification code expired"})
+			httpx.RespondError(c, http.StatusBadRequest, "code_expired", "Verification code expired")
 		default:
 			logrus.WithError(err).Error("Failed to verify email")
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "internal_error", Message: "Failed to verify email"})
+			httpx.RespondError(c, http.StatusInternalServerError, "internal_error", "Failed to verify email")
 		}
 		return
 	}
 
-	c.JSON(http.StatusOK, AuthSuccessResponse{Message: "Email verified successfully"})
+	httpx.RespondOK(c, AuthSuccessResponse{
+		Message:            "Email verified successfully",
+		User:               toUserResponse(user),
+		Token:              token,
+		OnboardingRequired: onboardingRequired,
+	})
+}
+
+func (h *AuthHandler) ResendVerification(c *gin.Context) {
+	var req ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httpx.RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	if err := h.authUC.ResendVerificationCode(c.Request.Context(), toResendVerificationDTO(req), getLocale(c)); err != nil {
+		logrus.WithError(err).Error("Failed to resend verification code")
+		httpx.RespondError(c, http.StatusInternalServerError, "internal_error", "Failed to resend verification code")
+		return
+	}
+
+	httpx.RespondOK(c, AuthSuccessResponse{Message: "If account exists and email is not verified, verification code was sent"})
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		httpx.RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
-	user, token, err := h.authUC.Login(c.Request.Context(), toLoginDTO(req), c.ClientIP(), c.Request.UserAgent())
+	user, token, onboardingRequired, err := h.authUC.Login(c.Request.Context(), toLoginDTO(req), c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		switch err {
 		case domain.ErrInvalidCredentials:
-			c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "invalid_credentials", Message: "Email or password is invalid"})
+			httpx.RespondError(c, http.StatusUnauthorized, "invalid_credentials", "Email or password is invalid")
 		case domain.ErrEmailNotVerified:
-			c.JSON(http.StatusForbidden, ErrorResponse{Error: "email_not_verified", Message: "Please verify your email first"})
+			httpx.RespondError(c, http.StatusForbidden, "email_not_verified", "Please verify your email first")
 		default:
 			logrus.WithError(err).Error("Failed to login")
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "internal_error", Message: "Failed to login"})
+			httpx.RespondError(c, http.StatusInternalServerError, "internal_error", "Failed to login")
 		}
 		return
 	}
 
-	c.JSON(http.StatusOK, AuthSuccessResponse{
-		Message: "Login successful",
-		User:    toUserResponse(user),
-		Token:   token,
+	httpx.RespondOK(c, AuthSuccessResponse{
+		Message:            "Login successful",
+		User:               toUserResponse(user),
+		Token:              token,
+		OnboardingRequired: onboardingRequired,
+	})
+}
+
+func (h *AuthHandler) AdminLogin(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httpx.RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	user, token, onboardingRequired, err := h.authUC.AdminLogin(c.Request.Context(), toLoginDTO(req), c.ClientIP(), c.Request.UserAgent())
+	if err != nil {
+		switch err {
+		case domain.ErrInvalidCredentials:
+			httpx.RespondError(c, http.StatusUnauthorized, "invalid_credentials", "Email or password is invalid")
+		case domain.ErrEmailNotVerified:
+			httpx.RespondError(c, http.StatusForbidden, "email_not_verified", "Please verify your email first")
+		case domain.ErrAdminAccessDenied:
+			httpx.RespondError(c, http.StatusForbidden, "forbidden", "Admin access required")
+		default:
+			logrus.WithError(err).Error("Failed to login admin")
+			httpx.RespondError(c, http.StatusInternalServerError, "internal_error", "Failed to login admin")
+		}
+		return
+	}
+
+	httpx.RespondOK(c, AuthSuccessResponse{
+		Message:            "Admin login successful",
+		User:               toUserResponse(user),
+		Token:              token,
+		Role:               platformauth.RoleAdmin,
+		OnboardingRequired: onboardingRequired,
 	})
 }
 
@@ -112,29 +167,29 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	clearCookie(c, "access_token")
 	clearCookie(c, "refresh_token")
 
-	c.JSON(http.StatusOK, AuthSuccessResponse{Message: "Logout successful"})
+	httpx.RespondOK(c, AuthSuccessResponse{Message: "Logout successful"})
 }
 
 func (h *AuthHandler) RequestResetPassword(c *gin.Context) {
 	var req ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		httpx.RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
 	if err := h.authUC.RequestPasswordReset(c.Request.Context(), toResetPasswordRequestDTO(req), getLocale(c)); err != nil {
 		logrus.WithError(err).Error("Failed to request reset password")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "internal_error", Message: "Failed to request reset password"})
+		httpx.RespondError(c, http.StatusInternalServerError, "internal_error", "Failed to request reset password")
 		return
 	}
 
-	c.JSON(http.StatusOK, AuthSuccessResponse{Message: "If email exists, reset code was sent"})
+	httpx.RespondOK(c, AuthSuccessResponse{Message: "If email exists, reset code was sent"})
 }
 
 func (h *AuthHandler) ConfirmResetPassword(c *gin.Context) {
 	var req ConfirmResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		httpx.RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
@@ -142,28 +197,29 @@ func (h *AuthHandler) ConfirmResetPassword(c *gin.Context) {
 	if err != nil {
 		switch err {
 		case domain.ErrUserNotFound:
-			c.JSON(http.StatusNotFound, ErrorResponse{Error: "not_found", Message: "User not found"})
+			httpx.RespondError(c, http.StatusNotFound, "not_found", "User not found")
 		case domain.ErrInvalidCode:
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_code", Message: "Reset code is invalid"})
+			httpx.RespondError(c, http.StatusBadRequest, "invalid_code", "Reset code is invalid")
 		case domain.ErrCodeExpired:
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "code_expired", Message: "Reset code expired"})
+			httpx.RespondError(c, http.StatusBadRequest, "code_expired", "Reset code expired")
 		default:
 			logrus.WithError(err).Error("Failed to reset password")
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "internal_error", Message: "Failed to reset password"})
+			httpx.RespondError(c, http.StatusInternalServerError, "internal_error", "Failed to reset password")
 		}
 		return
 	}
 
-	c.JSON(http.StatusOK, AuthSuccessResponse{Message: "Password updated successfully"})
+	httpx.RespondOK(c, AuthSuccessResponse{Message: "Password updated successfully"})
 }
 
 func (h *AuthHandler) CheckAuth(c *gin.Context) {
-	if _, ok := infrastructure.GetUserIDFromContext(c); !ok {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "Not authenticated"})
+	if _, ok := platformauth.GetUserIDFromContext(c); !ok {
+		httpx.RespondError(c, http.StatusUnauthorized, "unauthorized", "Not authenticated")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	role, _ := platformauth.GetUserRoleFromContext(c)
+	httpx.RespondOK(c, gin.H{"status": "ok", "role": role})
 }
 
 func clearCookie(c *gin.Context, name string) {
