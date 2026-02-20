@@ -51,3 +51,15 @@ type ManagerModel struct {
 func (ManagerModel) TableName() string {
 	return "managers"
 }
+
+type CareerModel struct {
+	ID        uint      `gorm:"primaryKey;comment:ID"`
+	ManagerID uint      `gorm:"index;not null;comment:Manager ID"`
+	Name      string    `gorm:"type:varchar(160);not null;comment:Career Name"`
+	CreatedAt time.Time `gorm:"autoCreateTime;comment:Created At"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime;comment:Updated At"`
+}
+
+func (CareerModel) TableName() string {
+	return "careers"
+}

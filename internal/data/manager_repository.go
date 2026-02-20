@@ -56,3 +56,20 @@ func (r *managerRepository) ExistsByUserID(ctx context.Context, userID uint) (bo
 	}
 	return count > 0, nil
 }
+
+func (r *managerRepository) ListByUserIDs(ctx context.Context, userIDs []uint) ([]*domain.Manager, error) {
+	if len(userIDs) == 0 {
+		return []*domain.Manager{}, nil
+	}
+
+	var models []ManagerModel
+	if err := r.db.WithContext(ctx).Where("user_id IN ?", userIDs).Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("failed to list managers by user ids: %w", err)
+	}
+
+	managers := make([]*domain.Manager, 0, len(models))
+	for i := range models {
+		managers = append(managers, toManagerDomain(&models[i]))
+	}
+	return managers, nil
+}

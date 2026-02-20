@@ -26,10 +26,20 @@ var migrateCmd = cobra.Command{
 			{
 				ID: "202602192030_create_tables",
 				Migrate: func(tx *gorm.DB) error {
-					return tx.AutoMigrate(&data.UserModel{}, &data.UserLastLoginModel{}, &data.ManagerModel{})
+					return tx.AutoMigrate(
+						&data.UserModel{},
+						&data.UserLastLoginModel{},
+						&data.ManagerModel{},
+						&data.CareerModel{},
+					)
 				},
 				Rollback: func(tx *gorm.DB) error {
-					return tx.Migrator().DropTable("users", "user_last_logins", "managers")
+					return tx.Migrator().DropTable(
+						"users",
+						"user_last_logins",
+						"managers",
+						"careers",
+					)
 				},
 			},
 		})

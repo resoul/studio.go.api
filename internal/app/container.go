@@ -25,6 +25,7 @@ type Container struct {
 	AuthHandler    *handler.AuthHandler
 	UserHandler    *handler.UserHandler
 	ManagerHandler *handler.ManagerHandler
+	CareerHandler  *handler.CareerHandler
 
 	UserAuthMiddleware  gin.HandlerFunc
 	AdminAuthMiddleware gin.HandlerFunc
@@ -40,6 +41,7 @@ func NewContainer(ctx context.Context) (*Container, error) {
 
 	userRepo := data.NewUserRepository(db)
 	managerRepo := data.NewManagerRepository(db)
+	careerRepo := data.NewCareerRepository(db)
 
 	emailSender := mailer.NewLogEmailSender()
 	if strings.EqualFold(cfg.Mailer.Provider, "smtp") {
@@ -61,8 +63,9 @@ func NewContainer(ctx context.Context) (*Container, error) {
 		emailSender,
 		cfg.Mailer.GetAdminEmails(),
 	)
-	userUC := usecase.NewUserUseCase(userRepo)
+	userUC := usecase.NewUserUseCase(userRepo, managerRepo, careerRepo)
 	managerUC := usecase.NewManagerUseCase(managerRepo)
+	careerUC := usecase.NewCareerUseCase(managerRepo, careerRepo)
 
 	return &Container{
 		Config:              cfg,
@@ -70,6 +73,7 @@ func NewContainer(ctx context.Context) (*Container, error) {
 		AuthHandler:         handler.NewAuthHandler(authUC),
 		UserHandler:         handler.NewUserHandler(userUC),
 		ManagerHandler:      handler.NewManagerHandler(managerUC),
+		CareerHandler:       handler.NewCareerHandler(careerUC),
 		UserAuthMiddleware:  platformauth.UserAuthMiddleware(userTokenManager),
 		AdminAuthMiddleware: platformauth.AdminAuthMiddleware(userTokenManager, cfg.Auth.GetAdminRoles()),
 	}, nil

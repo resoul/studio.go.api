@@ -7,6 +7,7 @@ var (
 	ErrUserAlreadyExists  = errors.New("user already exists")
 	ErrManagerNotFound    = errors.New("manager not found")
 	ErrManagerExists      = errors.New("manager already exists")
+	ErrCareerNotFound     = errors.New("career not found")
 	ErrUsernameTaken      = errors.New("username already exists")
 	ErrInvalidUsername    = errors.New("invalid username")
 	ErrInvalidCredentials = errors.New("invalid credentials")
