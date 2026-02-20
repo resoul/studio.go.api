@@ -10,6 +10,7 @@ func RegisterRoutes(
 	authHandler *AuthHandler,
 	userHandler *UserHandler,
 	managerHandler *ManagerHandler,
+	careerHandler *CareerHandler,
 	userAuthMiddleware gin.HandlerFunc,
 	adminAuthMiddleware gin.HandlerFunc,
 ) {
@@ -59,6 +60,12 @@ func RegisterRoutes(
 		{
 			managers.GET("/me", userAuthMiddleware, managerHandler.GetMe)
 			managers.POST("/me", userAuthMiddleware, managerHandler.CreateMe)
+		}
+
+		careers := v1.Group("/careers")
+		{
+			careers.GET("/me", userAuthMiddleware, careerHandler.ListMe)
+			careers.POST("/me", userAuthMiddleware, careerHandler.CreateMe)
 		}
 	}
 }

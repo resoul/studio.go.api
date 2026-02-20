@@ -17,4 +17,11 @@ type ManagerRepository interface {
 	Create(ctx context.Context, manager *Manager) error
 	GetByUserID(ctx context.Context, userID uint) (*Manager, error)
 	ExistsByUserID(ctx context.Context, userID uint) (bool, error)
+	ListByUserIDs(ctx context.Context, userIDs []uint) ([]*Manager, error)
+}
+
+type CareerRepository interface {
+	Create(ctx context.Context, career *Career) error
+	ListByManagerID(ctx context.Context, managerID uint) ([]*Career, error)
+	ListByManagerIDs(ctx context.Context, managerIDs []uint) ([]*Career, error)
 }

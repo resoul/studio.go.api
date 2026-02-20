@@ -30,3 +30,11 @@ type Manager struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+type Career struct {
+	ID        uint
+	ManagerID uint
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}

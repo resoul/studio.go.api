@@ -61,3 +61,15 @@ type ManagerResponse struct {
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 }
+
+type CreateCareerRequest struct {
+	Name string `json:"name" binding:"required"`
+}
+
+type CareerResponse struct {
+	ID        uint   `json:"id"`
+	ManagerID uint   `json:"manager_id"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}

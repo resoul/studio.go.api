@@ -54,6 +54,12 @@ func toCreateManagerDTO(req CreateManagerRequest) usecase.CreateManagerDTO {
 	}
 }
 
+func toCreateCareerDTO(req CreateCareerRequest) usecase.CreateCareerDTO {
+	return usecase.CreateCareerDTO{
+		Name: req.Name,
+	}
+}
+
 func toUserResponse(dto *usecase.UserDTO) UserResponse {
 	if dto == nil {
 		return UserResponse{}
@@ -81,6 +87,20 @@ func toManagerResponse(dto *usecase.ManagerDTO) ManagerResponse {
 		FirstName: dto.FirstName,
 		LastName:  dto.LastName,
 		Birthday:  dto.Birthday,
+		CreatedAt: dto.CreatedAt,
+		UpdatedAt: dto.UpdatedAt,
+	}
+}
+
+func toCareerResponse(dto *usecase.CareerDTO) CareerResponse {
+	if dto == nil {
+		return CareerResponse{}
+	}
+
+	return CareerResponse{
+		ID:        dto.ID,
+		ManagerID: dto.ManagerID,
+		Name:      dto.Name,
 		CreatedAt: dto.CreatedAt,
 		UpdatedAt: dto.UpdatedAt,
 	}

@@ -54,13 +54,25 @@ type CreateManagerDTO struct {
 }
 
 type ManagerDTO struct {
-	ID        uint
-	UserID    uint
-	FirstName string
-	LastName  string
-	Birthday  string
-	CreatedAt int64
-	UpdatedAt int64
+	ID        uint   `json:"id"`
+	UserID    uint   `json:"user_id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Birthday  string `json:"birthday"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+type CreateCareerDTO struct {
+	Name string
+}
+
+type CareerDTO struct {
+	ID        uint   `json:"id"`
+	ManagerID uint   `json:"manager_id"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 func mapManagerToDTO(manager *domain.Manager) *ManagerDTO {
@@ -76,5 +88,19 @@ func mapManagerToDTO(manager *domain.Manager) *ManagerDTO {
 		Birthday:  manager.Birthday.Format(time.DateOnly),
 		CreatedAt: manager.CreatedAt.Unix(),
 		UpdatedAt: manager.UpdatedAt.Unix(),
+	}
+}
+
+func mapCareerToDTO(career *domain.Career) *CareerDTO {
+	if career == nil {
+		return nil
+	}
+
+	return &CareerDTO{
+		ID:        career.ID,
+		ManagerID: career.ManagerID,
+		Name:      career.Name,
+		CreatedAt: career.CreatedAt.Unix(),
+		UpdatedAt: career.UpdatedAt.Unix(),
 	}
 }

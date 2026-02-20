@@ -81,3 +81,29 @@ func toManagerModel(entity *domain.Manager) *ManagerModel {
 		UpdatedAt: entity.UpdatedAt,
 	}
 }
+
+func toCareerDomain(model *CareerModel) *domain.Career {
+	if model == nil {
+		return nil
+	}
+	return &domain.Career{
+		ID:        model.ID,
+		ManagerID: model.ManagerID,
+		Name:      model.Name,
+		CreatedAt: model.CreatedAt,
+		UpdatedAt: model.UpdatedAt,
+	}
+}
+
+func toCareerModel(entity *domain.Career) *CareerModel {
+	if entity == nil {
+		return nil
+	}
+	return &CareerModel{
+		ID:        entity.ID,
+		ManagerID: entity.ManagerID,
+		Name:      entity.Name,
+		CreatedAt: entity.CreatedAt,
+		UpdatedAt: entity.UpdatedAt,
+	}
+}

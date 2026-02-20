@@ -42,6 +42,7 @@ func serve(cmd *cobra.Command, args []string) {
 		container.AuthHandler,
 		container.UserHandler,
 		container.ManagerHandler,
+		container.CareerHandler,
 		container.UserAuthMiddleware,
 		container.AdminAuthMiddleware,
 	)
