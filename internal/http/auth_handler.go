@@ -11,14 +11,12 @@ import (
 )
 
 type AuthHandler struct {
-	authUC       usecase.AuthUseCase
-	tokenManager *infrastructure.UserTokenManager
+	authUC usecase.AuthUseCase
 }
 
-func NewAuthHandler(authUC usecase.AuthUseCase, tokenManager *infrastructure.UserTokenManager) *AuthHandler {
+func NewAuthHandler(authUC usecase.AuthUseCase) *AuthHandler {
 	return &AuthHandler{
-		authUC:       authUC,
-		tokenManager: tokenManager,
+		authUC: authUC,
 	}
 }
 
@@ -29,7 +27,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := h.authUC.Register(c.Request.Context(), toRegisterDTO(req))
+	user, err := h.authUC.Register(c.Request.Context(), toRegisterDTO(req), c.ClientIP(), c.Request.UserAgent(), getLocale(c))
 	if err != nil {
 		if err == domain.ErrUserAlreadyExists {
 			c.JSON(http.StatusConflict, ErrorResponse{Error: "user_exists", Message: "User with this email already exists"})
@@ -61,7 +59,7 @@ func (h *AuthHandler) VerifyEmail(c *gin.Context) {
 		return
 	}
 
-	err := h.authUC.VerifyEmail(c.Request.Context(), toVerifyEmailDTO(req))
+	err := h.authUC.VerifyEmail(c.Request.Context(), toVerifyEmailDTO(req), getLocale(c))
 	if err != nil {
 		switch err {
 		case domain.ErrUserNotFound:
@@ -87,7 +85,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user, err := h.authUC.Login(c.Request.Context(), toLoginDTO(req))
+	user, token, err := h.authUC.Login(c.Request.Context(), toLoginDTO(req), c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		switch err {
 		case domain.ErrInvalidCredentials:
@@ -98,13 +96,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			logrus.WithError(err).Error("Failed to login")
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "internal_error", Message: "Failed to login"})
 		}
-		return
-	}
-
-	token, err := h.tokenManager.Generate(user.ID)
-	if err != nil {
-		logrus.WithError(err).Error("Failed to generate token")
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "internal_error", Message: "Failed to login"})
 		return
 	}
 
@@ -131,7 +122,7 @@ func (h *AuthHandler) RequestResetPassword(c *gin.Context) {
 		return
 	}
 
-	if err := h.authUC.RequestPasswordReset(c.Request.Context(), toResetPasswordRequestDTO(req)); err != nil {
+	if err := h.authUC.RequestPasswordReset(c.Request.Context(), toResetPasswordRequestDTO(req), getLocale(c)); err != nil {
 		logrus.WithError(err).Error("Failed to request reset password")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "internal_error", Message: "Failed to request reset password"})
 		return
@@ -147,7 +138,7 @@ func (h *AuthHandler) ConfirmResetPassword(c *gin.Context) {
 		return
 	}
 
-	err := h.authUC.ResetPassword(c.Request.Context(), toResetPasswordDTO(req))
+	err := h.authUC.ResetPassword(c.Request.Context(), toResetPasswordDTO(req), getLocale(c))
 	if err != nil {
 		switch err {
 		case domain.ErrUserNotFound:
@@ -177,4 +168,17 @@ func (h *AuthHandler) CheckAuth(c *gin.Context) {
 
 func clearCookie(c *gin.Context, name string) {
 	c.SetCookie(name, "", -1, "/", "", false, true)
+}
+
+func getLocale(c *gin.Context) string {
+	header := c.GetHeader("Accept-Language")
+	if len(header) < 2 {
+		return "en"
+	}
+	switch header[:2] {
+	case "ru", "RU":
+		return "ru"
+	default:
+		return "en"
+	}
 }

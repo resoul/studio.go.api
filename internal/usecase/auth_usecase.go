@@ -5,46 +5,49 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/football.manager.api/internal/domain"
 	"github.com/football.manager.api/internal/infrastructure"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthUseCase interface {
-	Register(ctx context.Context, dto RegisterDTO) (*UserDTO, error)
-	VerifyEmail(ctx context.Context, dto VerifyEmailDTO) error
-	Login(ctx context.Context, dto LoginDTO) (*UserDTO, error)
-	RequestPasswordReset(ctx context.Context, dto ResetPasswordRequestDTO) error
-	ResetPassword(ctx context.Context, dto ResetPasswordDTO) error
+	Register(ctx context.Context, dto RegisterDTO, ip, userAgent, locale string) (*UserDTO, error)
+	VerifyEmail(ctx context.Context, dto VerifyEmailDTO, locale string) error
+	Login(ctx context.Context, dto LoginDTO, ip, userAgent string) (*UserDTO, string, error)
+	RequestPasswordReset(ctx context.Context, dto ResetPasswordRequestDTO, locale string) error
+	ResetPassword(ctx context.Context, dto ResetPasswordDTO, locale string) error
 }
 
 type authUseCase struct {
-	userRepo domain.UserRepository
-	emailer  infrastructure.EmailSender
+	userRepo    domain.UserRepository
+	tokenMngr   *infrastructure.UserTokenManager
+	emailer     infrastructure.EmailSender
+	adminEmails []string
 }
 
-var usernamePattern = regexp.MustCompile(`^[a-z0-9_.-]{3,32}$`)
-
-func NewAuthUseCase(userRepo domain.UserRepository, emailer infrastructure.EmailSender) AuthUseCase {
+func NewAuthUseCase(
+	userRepo domain.UserRepository,
+	tokenMngr *infrastructure.UserTokenManager,
+	emailer infrastructure.EmailSender,
+	adminEmails []string,
+) AuthUseCase {
 	return &authUseCase{
-		userRepo: userRepo,
-		emailer:  emailer,
+		userRepo:    userRepo,
+		tokenMngr:   tokenMngr,
+		emailer:     emailer,
+		adminEmails: adminEmails,
 	}
 }
 
-func (uc *authUseCase) Register(ctx context.Context, dto RegisterDTO) (*UserDTO, error) {
+func (uc *authUseCase) Register(ctx context.Context, dto RegisterDTO, ip, userAgent, locale string) (*UserDTO, error) {
 	email := strings.TrimSpace(strings.ToLower(dto.Email))
-	username := strings.TrimSpace(strings.ToLower(dto.Username))
 	fullName := strings.TrimSpace(dto.FullName)
-	if email == "" || dto.Password == "" || username == "" || fullName == "" {
-		return nil, fmt.Errorf("username, full name, email and password are required")
-	}
-	if !usernamePattern.MatchString(username) {
-		return nil, domain.ErrInvalidUsername
+	if email == "" || dto.Password == "" || fullName == "" {
+		return nil, fmt.Errorf("full name, email and password are required")
 	}
 
 	existing, err := uc.userRepo.GetByEmail(ctx, email)
@@ -53,14 +56,6 @@ func (uc *authUseCase) Register(ctx context.Context, dto RegisterDTO) (*UserDTO,
 	}
 	if err != nil && err != domain.ErrUserNotFound {
 		return nil, fmt.Errorf("failed to check existing user: %w", err)
-	}
-
-	existingByUsername, err := uc.userRepo.GetByUsername(ctx, username)
-	if err == nil && existingByUsername != nil {
-		return nil, domain.ErrUsernameTaken
-	}
-	if err != nil && err != domain.ErrUserNotFound {
-		return nil, fmt.Errorf("failed to check existing username: %w", err)
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(dto.Password), bcrypt.DefaultCost)
@@ -75,10 +70,12 @@ func (uc *authUseCase) Register(ctx context.Context, dto RegisterDTO) (*UserDTO,
 	expiresAt := time.Now().UTC().Add(15 * time.Minute)
 
 	user := &domain.User{
-		Username:              username,
+		UUID:                  uuid.New().String(),
 		FullName:              fullName,
 		Email:                 email,
 		PasswordHash:          string(passwordHash),
+		RegistrationIP:        sanitizeIP(ip),
+		RegistrationUserAgent: sanitizeUserAgent(userAgent),
 		VerificationCode:      code,
 		VerificationExpiresAt: &expiresAt,
 	}
@@ -87,14 +84,21 @@ func (uc *authUseCase) Register(ctx context.Context, dto RegisterDTO) (*UserDTO,
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	if err := uc.emailer.Send(ctx, user.Email, "Account verification code", fmt.Sprintf("Your verification code is: %s", code)); err != nil {
+	verifyEmail, err := registrationCodeEmail(locale, user.FullName, code, expiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to render registration email: %w", err)
+	}
+	if err := uc.emailer.Send(ctx, user.Email, verifyEmail.Subject, verifyEmail.TextBody, verifyEmail.HTMLBody); err != nil {
 		return nil, fmt.Errorf("failed to send verification code: %w", err)
+	}
+	if err := uc.notifyAdminsAboutRegistration(ctx, user, ip, userAgent, locale); err != nil {
+		return nil, err
 	}
 
 	return mapUserToDTO(user), nil
 }
 
-func (uc *authUseCase) VerifyEmail(ctx context.Context, dto VerifyEmailDTO) error {
+func (uc *authUseCase) VerifyEmail(ctx context.Context, dto VerifyEmailDTO, locale string) error {
 	user, err := uc.userRepo.GetByEmail(ctx, strings.TrimSpace(strings.ToLower(dto.Email)))
 	if err != nil {
 		return err
@@ -112,30 +116,51 @@ func (uc *authUseCase) VerifyEmail(ctx context.Context, dto VerifyEmailDTO) erro
 	user.EmailVerifiedAt = &now
 	user.VerificationCode = ""
 	user.VerificationExpiresAt = nil
-	return uc.userRepo.Update(ctx, user)
+	if err := uc.userRepo.Update(ctx, user); err != nil {
+		return err
+	}
+
+	successEmail, err := emailVerifiedSuccessEmail(locale, user.FullName)
+	if err != nil {
+		return fmt.Errorf("failed to render verified email: %w", err)
+	}
+	return uc.emailer.Send(ctx, user.Email, successEmail.Subject, successEmail.TextBody, successEmail.HTMLBody)
 }
 
-func (uc *authUseCase) Login(ctx context.Context, dto LoginDTO) (*UserDTO, error) {
+func (uc *authUseCase) Login(ctx context.Context, dto LoginDTO, ip, userAgent string) (*UserDTO, string, error) {
 	user, err := uc.userRepo.GetByEmail(ctx, strings.TrimSpace(strings.ToLower(dto.Email)))
 	if err != nil {
 		if err == domain.ErrUserNotFound {
-			return nil, domain.ErrInvalidCredentials
+			return nil, "", domain.ErrInvalidCredentials
 		}
-		return nil, err
+		return nil, "", err
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(dto.Password)); err != nil {
-		return nil, domain.ErrInvalidCredentials
+		return nil, "", domain.ErrInvalidCredentials
 	}
 
 	if user.EmailVerifiedAt == nil {
-		return nil, domain.ErrEmailNotVerified
+		return nil, "", domain.ErrEmailNotVerified
 	}
 
-	return mapUserToDTO(user), nil
+	token, err := uc.tokenMngr.Generate(user.ID)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	user.LoginCount++
+	if err := uc.userRepo.Update(ctx, user); err != nil {
+		return nil, "", fmt.Errorf("failed to update login metadata: %w", err)
+	}
+	if err := uc.userRepo.UpdateLastLogin(ctx, user.ID, sanitizeIP(ip), sanitizeUserAgent(userAgent)); err != nil {
+		return nil, "", fmt.Errorf("failed to save last login data: %w", err)
+	}
+
+	return mapUserToDTO(user), token, nil
 }
 
-func (uc *authUseCase) RequestPasswordReset(ctx context.Context, dto ResetPasswordRequestDTO) error {
+func (uc *authUseCase) RequestPasswordReset(ctx context.Context, dto ResetPasswordRequestDTO, locale string) error {
 	user, err := uc.userRepo.GetByEmail(ctx, strings.TrimSpace(strings.ToLower(dto.Email)))
 	if err != nil {
 		if err == domain.ErrUserNotFound {
@@ -156,10 +181,14 @@ func (uc *authUseCase) RequestPasswordReset(ctx context.Context, dto ResetPasswo
 		return err
 	}
 
-	return uc.emailer.Send(ctx, user.Email, "Reset password code", fmt.Sprintf("Your reset password code is: %s", code))
+	resetEmail, err := resetPasswordCodeEmail(locale, user.FullName, code, expiresAt)
+	if err != nil {
+		return fmt.Errorf("failed to render reset email: %w", err)
+	}
+	return uc.emailer.Send(ctx, user.Email, resetEmail.Subject, resetEmail.TextBody, resetEmail.HTMLBody)
 }
 
-func (uc *authUseCase) ResetPassword(ctx context.Context, dto ResetPasswordDTO) error {
+func (uc *authUseCase) ResetPassword(ctx context.Context, dto ResetPasswordDTO, locale string) error {
 	user, err := uc.userRepo.GetByEmail(ctx, strings.TrimSpace(strings.ToLower(dto.Email)))
 	if err != nil {
 		return err
@@ -182,7 +211,15 @@ func (uc *authUseCase) ResetPassword(ctx context.Context, dto ResetPasswordDTO) 
 	user.ResetPasswordCode = ""
 	user.ResetPasswordExpiresAt = nil
 
-	return uc.userRepo.Update(ctx, user)
+	if err := uc.userRepo.Update(ctx, user); err != nil {
+		return err
+	}
+
+	successEmail, err := passwordChangedSuccessEmail(locale, user.FullName)
+	if err != nil {
+		return fmt.Errorf("failed to render password changed email: %w", err)
+	}
+	return uc.emailer.Send(ctx, user.Email, successEmail.Subject, successEmail.TextBody, successEmail.HTMLBody)
 }
 
 func generateCode(length int) (string, error) {
@@ -212,7 +249,7 @@ func mapUserToDTO(user *domain.User) *UserDTO {
 
 	return &UserDTO{
 		ID:              user.ID,
-		Username:        user.Username,
+		UUID:            user.UUID,
 		FullName:        user.FullName,
 		Email:           user.Email,
 		EmailVerified:   user.EmailVerifiedAt != nil,
@@ -220,4 +257,38 @@ func mapUserToDTO(user *domain.User) *UserDTO {
 		CreatedAt:       user.CreatedAt.Unix(),
 		UpdatedAt:       user.UpdatedAt.Unix(),
 	}
+}
+
+func sanitizeIP(ip string) string {
+	ip = strings.TrimSpace(ip)
+	if len(ip) > 45 {
+		return ip[:45]
+	}
+	return ip
+}
+
+func sanitizeUserAgent(userAgent string) string {
+	userAgent = strings.TrimSpace(userAgent)
+	if len(userAgent) > 512 {
+		return userAgent[:512]
+	}
+	return userAgent
+}
+
+func (uc *authUseCase) notifyAdminsAboutRegistration(ctx context.Context, user *domain.User, ip, userAgent, locale string) error {
+	if len(uc.adminEmails) == 0 {
+		return nil
+	}
+
+	adminEmail, err := adminNewRegistrationEmail(locale, user.FullName, user.Email, sanitizeIP(ip), sanitizeUserAgent(userAgent), time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("failed to render admin email: %w", err)
+	}
+	for _, to := range uc.adminEmails {
+		if err := uc.emailer.Send(ctx, to, adminEmail.Subject, adminEmail.TextBody, adminEmail.HTMLBody); err != nil {
+			return fmt.Errorf("failed to notify admin %s: %w", to, err)
+		}
+	}
+
+	return nil
 }

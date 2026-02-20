@@ -4,10 +4,13 @@ import "time"
 
 type User struct {
 	ID                     uint
-	Username               string
+	UUID                   string
 	FullName               string
 	Email                  string
 	PasswordHash           string
+	RegistrationIP         string
+	RegistrationUserAgent  string
+	LoginCount             uint
 	EmailVerifiedAt        *time.Time
 	VerificationCode       string
 	VerificationExpiresAt  *time.Time

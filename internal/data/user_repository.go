@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/football.manager.api/internal/domain"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type userRepository struct {
@@ -82,4 +84,31 @@ func (r *userRepository) Update(ctx context.Context, user *domain.User) error {
 
 	user.UpdatedAt = model.UpdatedAt
 	return nil
+}
+
+func (r *userRepository) UpdateLastLogin(ctx context.Context, userID uint, ip, userAgent string) error {
+	model := &UserLastLoginModel{
+		UserID:             userID,
+		LastLoginAt:        timePtr(time.Now().UTC()),
+		LastLoginIP:        ip,
+		LastLoginUserAgent: userAgent,
+	}
+
+	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"last_login_at":         model.LastLoginAt,
+			"last_login_ip":         model.LastLoginIP,
+			"last_login_user_agent": model.LastLoginUserAgent,
+			"updated_at":            time.Now().UTC(),
+		}),
+	}).Create(model).Error; err != nil {
+		return fmt.Errorf("failed to update last login metadata: %w", err)
+	}
+
+	return nil
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }

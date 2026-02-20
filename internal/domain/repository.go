@@ -8,4 +8,5 @@ type UserRepository interface {
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
 	Update(ctx context.Context, user *User) error
+	UpdateLastLogin(ctx context.Context, userID uint, ip, userAgent string) error
 }

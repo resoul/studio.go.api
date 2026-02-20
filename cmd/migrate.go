@@ -32,6 +32,76 @@ var migrateCmd = cobra.Command{
 					return tx.Migrator().DropTable("users")
 				},
 			},
+			{
+				ID: "202602201200_add_user_client_metadata",
+				Migrate: func(tx *gorm.DB) error {
+					cols := []string{
+						"RegistrationIP",
+						"RegistrationUserAgent",
+						"LoginCount",
+					}
+					for _, col := range cols {
+						if tx.Migrator().HasColumn(&data.UserModel{}, col) {
+							continue
+						}
+						if err := tx.Migrator().AddColumn(&data.UserModel{}, col); err != nil {
+							return err
+						}
+					}
+					return nil
+				},
+				Rollback: func(tx *gorm.DB) error {
+					cols := []string{
+						"RegistrationIP",
+						"RegistrationUserAgent",
+						"LoginCount",
+					}
+					for _, col := range cols {
+						if !tx.Migrator().HasColumn(&data.UserModel{}, col) {
+							continue
+						}
+						if err := tx.Migrator().DropColumn(&data.UserModel{}, col); err != nil {
+							return err
+						}
+					}
+					return nil
+				},
+			},
+			{
+				ID: "202602201430_move_last_login_to_separate_table",
+				Migrate: func(tx *gorm.DB) error {
+					if err := tx.AutoMigrate(&data.UserLastLoginModel{}); err != nil {
+						return err
+					}
+
+					statements := []string{
+						"ALTER TABLE users DROP COLUMN IF EXISTS last_login_at",
+						"ALTER TABLE users DROP COLUMN IF EXISTS last_login_ip",
+						"ALTER TABLE users DROP COLUMN IF EXISTS last_login_user_agent",
+					}
+					for _, stmt := range statements {
+						if err := tx.Exec(stmt).Error; err != nil {
+							return err
+						}
+					}
+
+					return nil
+				},
+				Rollback: func(tx *gorm.DB) error {
+					statements := []string{
+						"ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP NULL",
+						"ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip VARCHAR(45) NOT NULL DEFAULT ''",
+						"ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_user_agent VARCHAR(512) NOT NULL DEFAULT ''",
+					}
+					for _, stmt := range statements {
+						if err := tx.Exec(stmt).Error; err != nil {
+							return err
+						}
+					}
+
+					return tx.Migrator().DropTable(&data.UserLastLoginModel{})
+				},
+			},
 		})
 
 		if err := m.Migrate(); err != nil {

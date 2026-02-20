@@ -33,13 +33,15 @@ AUTH_API_TOKENS=token1,token2
 AUTH_JWT_SECRET=change-me-in-prod
 AUTH_JWT_TTL_MINUTES=60
 
-# Email sender (log | smtp)
-EMAIL_PROVIDER=smtp
-EMAIL_FROM=no-reply@manager.localhost
-EMAIL_HOST=localhost
-EMAIL_PORT=1025
-EMAIL_USERNAME=
-EMAIL_PASSWORD=
+# Mailer (log | smtp)
+MAILER_PROVIDER=smtp
+MAILER_FROM=no-reply@manager.localhost
+MAILER_HOST=localhost
+MAILER_PORT=1025
+MAILER_USERNAME=
+MAILER_PASSWORD=
+MAILER_LOGO_PATH=logo.png
+MAILER_ADMIN_EMAILS=admin@manager.localhost
 ```
 
 ## Quick Start
@@ -89,8 +91,12 @@ curl -X POST http://localhost:8080/api/v1/auth/registration \
 ```
 
 After registration verification code is sent through configured sender:
-- `EMAIL_PROVIDER=log`: code appears in API logs
-- `EMAIL_PROVIDER=smtp`: email is sent via SMTP (for local dev use MailHog on `localhost:1025`)
+- `MAILER_PROVIDER=log`: code appears in API logs
+- `MAILER_PROVIDER=smtp`: email is sent via SMTP (for local dev use MailHog on `localhost:1025`)
+- `MAILER_LOGO_PATH`: path to logo file embedded in email template (default: `logo.png`)
+- `MAILER_ADMIN_EMAILS`: comma-separated list of admin emails for new registration notifications
+- Email templates are stored in `/Users/resoul/Projects/manager/projects/api/internal/usecase/templates/email/{en,ru}`
+- Localization is selected from `Accept-Language` (`ru` -> Russian, otherwise English)
 
 ### 2. Verify Email
 
@@ -136,8 +142,3 @@ make help
 make fmt
 make test
 ```
-
-## Notes
-
-- `users` table stores base user fields: `username`, `full_name`, `email`, `password_hash`, `created_at`, `updated_at`.
-- `username` is unique (same as `email`) and normalized to lowercase.

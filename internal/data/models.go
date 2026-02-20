@@ -4,10 +4,13 @@ import "time"
 
 type UserModel struct {
 	ID                     uint       `gorm:"primaryKey;comment:ID"`
-	Username               string     `gorm:"type:varchar(100);uniqueIndex;not null;comment:Username"`
+	UUID                   string     `gorm:"type:char(36);uniqueIndex;not null;column:uuid;comment:UUID"`
 	FullName               string     `gorm:"type:varchar(255);not null;default:'';comment:Full Name"`
 	Email                  string     `gorm:"type:varchar(255);uniqueIndex;not null;comment:Email"`
 	PasswordHash           string     `gorm:"type:varchar(255);not null;comment:Password Hash"`
+	RegistrationIP         string     `gorm:"type:varchar(45);not null;default:'';comment:Registration IP"`
+	RegistrationUserAgent  string     `gorm:"type:varchar(512);not null;default:'';comment:Registration User Agent"`
+	LoginCount             uint       `gorm:"not null;default:0;comment:Login Count"`
 	EmailVerifiedAt        *time.Time `gorm:"comment:Email Verified At"`
 	VerificationCode       string     `gorm:"type:varchar(20);comment:Verification Code"`
 	VerificationExpiresAt  *time.Time `gorm:"comment:Verification Code Expires At"`
@@ -19,4 +22,17 @@ type UserModel struct {
 
 func (UserModel) TableName() string {
 	return "users"
+}
+
+type UserLastLoginModel struct {
+	UserID             uint       `gorm:"primaryKey;comment:User ID"`
+	LastLoginAt        *time.Time `gorm:"comment:Last Login At"`
+	LastLoginIP        string     `gorm:"type:varchar(45);not null;default:'';comment:Last Login IP"`
+	LastLoginUserAgent string     `gorm:"type:varchar(512);not null;default:'';comment:Last Login User Agent"`
+	CreatedAt          time.Time  `gorm:"autoCreateTime;comment:Created At"`
+	UpdatedAt          time.Time  `gorm:"autoUpdateTime;comment:Updated At"`
+}
+
+func (UserLastLoginModel) TableName() string {
+	return "user_last_logins"
 }

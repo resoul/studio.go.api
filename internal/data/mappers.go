@@ -10,10 +10,13 @@ func toUserDomain(model *UserModel) *domain.User {
 	}
 	return &domain.User{
 		ID:                     model.ID,
-		Username:               model.Username,
+		UUID:                   model.UUID,
 		FullName:               model.FullName,
 		Email:                  model.Email,
 		PasswordHash:           model.PasswordHash,
+		RegistrationIP:         model.RegistrationIP,
+		RegistrationUserAgent:  model.RegistrationUserAgent,
+		LoginCount:             model.LoginCount,
 		EmailVerifiedAt:        model.EmailVerifiedAt,
 		VerificationCode:       model.VerificationCode,
 		VerificationExpiresAt:  model.VerificationExpiresAt,
@@ -30,10 +33,13 @@ func toUserModel(entity *domain.User) *UserModel {
 	}
 	return &UserModel{
 		ID:                     entity.ID,
-		Username:               entity.Username,
+		UUID:                   entity.UUID,
 		FullName:               entity.FullName,
 		Email:                  entity.Email,
 		PasswordHash:           entity.PasswordHash,
+		RegistrationIP:         entity.RegistrationIP,
+		RegistrationUserAgent:  entity.RegistrationUserAgent,
+		LoginCount:             entity.LoginCount,
 		EmailVerifiedAt:        entity.EmailVerifiedAt,
 		VerificationCode:       entity.VerificationCode,
 		VerificationExpiresAt:  entity.VerificationExpiresAt,

@@ -1,7 +1,6 @@
 package usecase
 
 type RegisterDTO struct {
-	Username string
 	FullName string
 	Email    string
 	Password string
@@ -29,7 +28,7 @@ type ResetPasswordDTO struct {
 
 type UserDTO struct {
 	ID              uint
-	Username        string
+	UUID            string
 	FullName        string
 	Email           string
 	EmailVerified   bool

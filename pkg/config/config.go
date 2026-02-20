@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -15,7 +16,7 @@ type Config struct {
 	Logging LoggingConfig  `envconfig:"LOG"`
 	Auth    AuthConfig     `envconfig:"AUTH"`
 	Server  ServerConfig   `envconfig:"SERVER"`
-	Email   EmailConfig    `envconfig:"EMAIL"`
+	Mailer  MailerConfig   `envconfig:"MAILER"`
 }
 
 type DatabaseConfig struct {
@@ -37,13 +38,15 @@ type ServerConfig struct {
 	CORSAllowedOrigins string `envconfig:"CORS_ALLOWED_ORIGINS" default:"http://dashboard.manager.localhost,http://localhost:5173"`
 }
 
-type EmailConfig struct {
-	Provider string `envconfig:"PROVIDER" default:"log"`
-	From     string `envconfig:"FROM" default:"no-reply@manager.localhost"`
-	Host     string `envconfig:"HOST" default:"localhost"`
-	Port     int    `envconfig:"PORT" default:"1025"`
-	Username string `envconfig:"USERNAME" required:"false"`
-	Password string `envconfig:"PASSWORD" required:"false"`
+type MailerConfig struct {
+	Provider    string `envconfig:"PROVIDER" default:"log"`
+	From        string `envconfig:"FROM" default:"no-reply@manager.localhost"`
+	Host        string `envconfig:"HOST" default:"localhost"`
+	Port        int    `envconfig:"PORT" default:"1025"`
+	Username    string `envconfig:"USERNAME" required:"false"`
+	Password    string `envconfig:"PASSWORD" required:"false"`
+	LogoPath    string `envconfig:"LOGO_PATH" default:"logo.png"`
+	AdminEmails string `envconfig:"ADMIN_EMAILS" required:"false"`
 }
 
 func (s *ServerConfig) GetCORSAllowedOrigins() []string {
@@ -78,6 +81,23 @@ func (a *AuthConfig) GetTokens() []string {
 	return result
 }
 
+func (m *MailerConfig) GetAdminEmails() []string {
+	if m.AdminEmails == "" {
+		return []string{}
+	}
+
+	emails := strings.Split(m.AdminEmails, ",")
+	result := make([]string, 0, len(emails))
+	for _, email := range emails {
+		email = strings.TrimSpace(strings.ToLower(email))
+		if email != "" {
+			result = append(result, email)
+		}
+	}
+
+	return result
+}
+
 func Init(ctx context.Context) *Config {
 	cfg, err := loadConfig(ctx)
 	if err != nil {
@@ -101,6 +121,38 @@ func loadConfig(ctx context.Context) (*Config, error) {
 	if err := envconfig.Process("", &cfg); err != nil {
 		return nil, fmt.Errorf("failed to process config: %w", err)
 	}
+	applyLegacyEmailFallback(&cfg.Mailer)
 
 	return &cfg, nil
+}
+
+func applyLegacyEmailFallback(mailer *MailerConfig) {
+	if mailer == nil {
+		return
+	}
+
+	if v := strings.TrimSpace(os.Getenv("EMAIL_PROVIDER")); v != "" && os.Getenv("MAILER_PROVIDER") == "" {
+		mailer.Provider = v
+	}
+	if v := strings.TrimSpace(os.Getenv("EMAIL_FROM")); v != "" && os.Getenv("MAILER_FROM") == "" {
+		mailer.From = v
+	}
+	if v := strings.TrimSpace(os.Getenv("EMAIL_HOST")); v != "" && os.Getenv("MAILER_HOST") == "" {
+		mailer.Host = v
+	}
+	if v := strings.TrimSpace(os.Getenv("EMAIL_PORT")); v != "" && os.Getenv("MAILER_PORT") == "" {
+		var port int
+		if _, err := fmt.Sscanf(v, "%d", &port); err == nil {
+			mailer.Port = port
+		}
+	}
+	if v := os.Getenv("EMAIL_USERNAME"); v != "" && os.Getenv("MAILER_USERNAME") == "" {
+		mailer.Username = v
+	}
+	if v := os.Getenv("EMAIL_PASSWORD"); v != "" && os.Getenv("MAILER_PASSWORD") == "" {
+		mailer.Password = v
+	}
+	if v := strings.TrimSpace(os.Getenv("EMAIL_ADMIN_EMAILS")); v != "" && os.Getenv("MAILER_ADMIN_EMAILS") == "" {
+		mailer.AdminEmails = v
+	}
 }

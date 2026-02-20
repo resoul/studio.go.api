@@ -6,7 +6,6 @@ import (
 
 func toRegisterDTO(req RegisterRequest) usecase.RegisterDTO {
 	return usecase.RegisterDTO{
-		Username: req.Username,
 		FullName: req.FullName,
 		Email:    req.Email,
 		Password: req.Password,
@@ -47,8 +46,7 @@ func toUserResponse(dto *usecase.UserDTO) UserResponse {
 	}
 
 	return UserResponse{
-		ID:              dto.ID,
-		Username:        dto.Username,
+		ID:              dto.UUID,
 		FullName:        dto.FullName,
 		Email:           dto.Email,
 		EmailVerified:   dto.EmailVerified,

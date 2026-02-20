@@ -23,7 +23,9 @@ func UserAuthMiddleware(tokenManager *UserTokenManager) gin.HandlerFunc {
 			return
 		}
 
-		userID, err := tokenManager.Parse(parts[1])
+		token := parts[1]
+
+		userID, err := tokenManager.Parse(token)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "message": "Invalid or expired token"})
 			c.Abort()

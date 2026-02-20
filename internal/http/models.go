@@ -40,7 +40,7 @@ type AuthSuccessResponse struct {
 }
 
 type UserResponse struct {
-	ID              uint   `json:"id"`
+	ID              string `json:"id"`
 	Username        string `json:"username"`
 	FullName        string `json:"full_name"`
 	Email           string `json:"email"`

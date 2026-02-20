@@ -12,11 +12,12 @@ func NewLogEmailSender() EmailSender {
 	return &logEmailSender{}
 }
 
-func (s *logEmailSender) Send(_ context.Context, to, subject, body string) error {
+func (s *logEmailSender) Send(_ context.Context, to, subject, textBody, htmlBody string) error {
 	logrus.WithFields(logrus.Fields{
 		"to":      to,
 		"subject": subject,
-		"body":    body,
+		"text":    textBody,
+		"html":    htmlBody,
 	}).Info("Email queued (log sender)")
 
 	return nil
