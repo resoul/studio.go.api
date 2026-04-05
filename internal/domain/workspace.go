@@ -66,6 +66,7 @@ type WorkspaceRepository interface {
 	CreateInvite(ctx context.Context, invite *WorkspaceInvite) error
 	GetInvite(ctx context.Context, token string) (*WorkspaceInvite, error)
 	DeleteInvite(ctx context.Context, token string) error
+	Update(ctx context.Context, ws *Workspace) error
 
 	SetCurrentWorkspace(ctx context.Context, config *UserWorkspaceConfig) error
 	GetCurrentWorkspace(ctx context.Context, userID string) (*UserWorkspaceConfig, error)
@@ -80,6 +81,14 @@ type CreateWorkspaceInput struct {
 	OwnerID     string    `json:"-"`
 }
 
+type UpdateWorkspaceInput struct {
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Logo        io.Reader `json:"-"`
+	LogoSize    int64     `json:"-"`
+	LogoType    string    `json:"-"`
+}
+
 type WorkspaceService interface {
 	CreateWorkspace(ctx context.Context, input CreateWorkspaceInput) (*Workspace, error)
 	GetWorkspace(ctx context.Context, id uuid.UUID) (*Workspace, error)
@@ -91,6 +100,7 @@ type WorkspaceService interface {
 
 	SetCurrentWorkspace(ctx context.Context, userID string, workspaceID uuid.UUID) error
 	GetCurrentWorkspace(ctx context.Context, userID string) (*Workspace, error)
+	UpdateWorkspace(ctx context.Context, id uuid.UUID, input UpdateWorkspaceInput) (*Workspace, error)
 }
 
 type Storage interface {

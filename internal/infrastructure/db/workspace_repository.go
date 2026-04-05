@@ -91,3 +91,7 @@ func (r *workspaceRepository) GetCurrentWorkspace(ctx context.Context, userID st
 	}
 	return &config, nil
 }
+
+func (r *workspaceRepository) Update(ctx context.Context, ws *domain.Workspace) error {
+	return r.db.WithContext(ctx).Save(ws).Error
+}

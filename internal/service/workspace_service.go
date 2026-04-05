@@ -204,6 +204,38 @@ func (s *workspaceService) GetCurrentWorkspace(ctx context.Context, userID strin
 	return s.GetWorkspace(ctx, config.CurrentWorkspaceID)
 }
 
+func (s *workspaceService) UpdateWorkspace(ctx context.Context, id uuid.UUID, input domain.UpdateWorkspaceInput) (*domain.Workspace, error) {
+	ws, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if input.Name != "" {
+		ws.Name = input.Name
+		ws.Slug = strings.ToLower(strings.ReplaceAll(input.Name, " ", "-"))
+	}
+	if input.Description != "" {
+		ws.Description = input.Description
+	}
+
+	if input.Logo != nil {
+		objectName := fmt.Sprintf("logos/%s/%s", ws.ID.String(), "logo")
+		err := s.storage.Upload(ctx, "workspaces", objectName, input.Logo, input.LogoSize, input.LogoType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upload logo: %w", err)
+		}
+		ws.LogoURL = objectName
+	}
+
+	ws.UpdatedAt = time.Now()
+
+	if err := s.repo.Update(ctx, ws); err != nil {
+		return nil, err
+	}
+
+	return s.GetWorkspace(ctx, ws.ID)
+}
+
 func generateRandomToken(length int) (string, error) {
 	b := make([]byte, length)
 	if _, err := rand.Read(b); err != nil {

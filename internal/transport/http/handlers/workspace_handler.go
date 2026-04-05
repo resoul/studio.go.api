@@ -192,3 +192,35 @@ func (h *WorkspaceHandler) SetCurrent(c *gin.Context) {
 
 	c.Status(http.StatusNoContent)
 }
+
+func (h *WorkspaceHandler) Update(c *gin.Context) {
+	wsIDStr := c.Param("id")
+	wsID, err := uuid.Parse(wsIDStr)
+	if err != nil {
+		utils.RespondError(c, http.StatusBadRequest, "SNAKE_CASE_INVALID_INPUT", "Invalid workspace id")
+		return
+	}
+
+	name := c.PostForm("name")
+	description := c.PostForm("description")
+
+	file, header, err := c.Request.FormFile("logo")
+	var input domain.UpdateWorkspaceInput
+	input.Name = name
+	input.Description = description
+
+	if err == nil {
+		defer file.Close()
+		input.Logo = file
+		input.LogoSize = header.Size
+		input.LogoType = header.Header.Get("Content-Type")
+	}
+
+	ws, err := h.service.UpdateWorkspace(c.Request.Context(), wsID, input)
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, "SNAKE_CASE_INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	utils.RespondOK(c, ws)
+}

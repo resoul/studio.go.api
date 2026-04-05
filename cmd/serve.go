@@ -69,6 +69,7 @@ func serve(cmd *cobra.Command) {
 				workspaces.POST("", workspaceHandler.Create)
 				workspaces.POST("/invites/:token/accept", workspaceHandler.AcceptInvite)
 				workspaces.POST("/:id/invites", workspaceHandler.CreateInvite)
+				workspaces.PATCH("/:id", workspaceHandler.Update)
 
 				workspaces.GET("/current", workspaceHandler.GetCurrent)
 				workspaces.POST("/current/:id", workspaceHandler.SetCurrent)
