@@ -7,14 +7,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/resoul/studio.go.api/internal/config"
 	"github.com/resoul/studio.go.api/internal/di"
 	"github.com/resoul/studio.go.api/internal/infrastructure/db"
 	"github.com/resoul/studio.go.api/internal/service"
 	"github.com/resoul/studio.go.api/internal/transport/http/handlers"
-	"github.com/resoul/studio.go.api/internal/transport/http/middleware"
-	"github.com/resoul/studio.go.api/internal/transport/http/utils"
+	"github.com/resoul/studio.go.api/internal/transport/http/router"
+	"github.com/resoul/studio.go.api/internal/worker"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -37,53 +36,31 @@ func serve(cmd *cobra.Command) {
 	}
 	defer container.Close()
 
+	// Repositories
 	profileRepo := db.NewProfileRepository(container.DB)
 	workspaceRepo := db.NewWorkspaceRepository(container.DB)
 
+	// Services
 	profileSvc := service.NewProfileService(profileRepo, container.Storage)
-	workspaceSvc := service.NewWorkspaceService(workspaceRepo, container.Storage, container.Mailer)
+	workspaceSvc := service.NewWorkspaceService(workspaceRepo, container.Storage, container.RabbitMQ)
 
+	// Handlers
 	profileHandler := handlers.NewProfileHandler(profileSvc, workspaceSvc)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceSvc)
 
-	router := gin.Default()
-	router.Use(utils.CORSMiddleware(cfg.Server.GetCORSAllowedOrigins()))
-
-	api := router.Group("/api/v1")
-	{
-		api.GET("/health", func(c *gin.Context) {
-			utils.RespondOK(c, gin.H{"status": "ok"})
-		})
-
-		api.GET("/workspaces/invites/:token/preview", workspaceHandler.GetInvitePreview)
-
-		protected := api.Group("")
-		protected.Use(middleware.AuthMiddleware(cfg))
-		{
-			protected.GET("/user/me", profileHandler.GetMe)
-			protected.PATCH("/user/profile", profileHandler.UpdateProfile)
-
-			workspaces := protected.Group("/workspaces")
-			{
-				workspaces.GET("", workspaceHandler.List)
-				workspaces.POST("", workspaceHandler.Create)
-				workspaces.POST("/invites/:token/accept", workspaceHandler.AcceptInvite)
-				workspaces.POST("/:id/invites", workspaceHandler.CreateInvite)
-				workspaces.PATCH("/:id", workspaceHandler.Update)
-
-				workspaces.GET("/current", workspaceHandler.GetCurrent)
-				workspaces.POST("/current/:id", workspaceHandler.SetCurrent)
-
-				workspaces.GET("/config", workspaceHandler.GetConfig)
-				workspaces.PATCH("/config/:id", workspaceHandler.UpdateConfig)
-			}
-		}
+	// Start invite worker (async email delivery via RabbitMQ)
+	if container.RabbitMQ != nil {
+		inviteWorker := worker.NewInviteWorker(container.RabbitMQ, workspaceRepo, container.Mailer)
+		go inviteWorker.Start(ctx)
 	}
+
+	// Router
+	r := router.New(cfg, profileHandler, workspaceHandler)
 
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      router,
+		Handler:      r,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -96,7 +73,6 @@ func serve(cmd *cobra.Command) {
 	}()
 
 	<-ctx.Done()
-
 	logrus.Info("Shutting down server...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

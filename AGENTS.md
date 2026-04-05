@@ -10,7 +10,7 @@ This document defines the responsibilities for each module in the project. We fo
 .
 ├── cmd/
 │   ├── root.go             # Cobra root command, WaitGroup injection
-│   ├── serve.go            # HTTP server startup and route wiring
+│   ├── serve.go            # HTTP server lifecycle only — no route wiring
 │   └── migrate.go          # Migration CLI commands (up / down)
 ├── internal/               # Private code
 │   ├── domain/             # Entities, Repository Interfaces, Service Interfaces
@@ -21,13 +21,15 @@ This document defines the responsibilities for each module in the project. We fo
 │   ├── service/            # Business Logic (Use Cases)
 │   │   ├── profile_service.go
 │   │   └── workspace_service.go
+│   ├── worker/             # Async background consumers (RabbitMQ)
+│   │   └── invite_worker.go
 │   ├── infrastructure/     # External adapters
 │   │   ├── db/             # GORM / PostgreSQL
 │   │   │   ├── migrations/
 │   │   │   ├── profile_repository.go
 │   │   │   └── workspace_repository.go
 │   │   ├── mailer/         # Email delivery
-│   │   │   └── mailer.go   # SMTP adapter (Mailhog + real providers)
+│   │   │   └── smtp.go     # SMTP adapter (Mailhog + real providers)
 │   │   ├── ory/            # Ory Kratos identity adapter
 │   │   ├── rabbitmq/       # AMQP client
 │   │   └── storage/        # MinIO / S3-compatible storage
@@ -37,6 +39,8 @@ This document defines the responsibilities for each module in the project. We fo
 │   │   └── config.go       # Env-based config (envconfig + godotenv)
 │   └── transport/
 │       └── http/           # Gin routes, handlers, middleware
+│           ├── router/
+│           │   └── router.go   # All route wiring lives here
 │           ├── handlers/
 │           ├── middleware/
 │           └── utils/      # CORS, respond helpers, error types
@@ -53,34 +57,77 @@ This document defines the responsibilities for each module in the project. We fo
 **Location:** `cmd/`
 - **Role:** Application startup, flag parsing, and dependency injection.
 - **Rules:**
-    - `serve.go` — initialises `di.Container`, wires repositories → services → handlers, starts Gin.
+    - `serve.go` — initialises `di.Container`, wires repositories → services → handlers, starts the router and the HTTP server. Starts background workers in goroutines. Contains no route definitions.
     - `migrate.go` — opens a raw GORM connection and runs `gormigrate` commands; never shares the serve-time container.
     - No business logic here — delegate everything to the Service layer.
 
 ### B. Transport Layer (Gin)
 **Location:** `internal/transport/http/`
-- **Middleware Agent:**
-    - `middleware/auth.go` — validates `ory_kratos_session` cookie via Kratos FrontendAPI.
-    - Injects `*ory.Identity` into `gin.Context` under the key `"user"`.
-    - Rejects unverified identities with `403 Forbidden`.
-- **Handler Agent:**
-    - Maps HTTP routes to **Service** methods.
-    - Handles multipart form binding and JSON binding.
-    - Returns standardised responses via `utils.RespondOK` / `utils.RespondError`.
-- **Utils:**
-    - `utils/cors.go` — origin-whitelist CORS middleware.
-    - `utils/respond.go` / `utils/response.go` — typed response helpers.
 
-### C. Service Layer (Business Logic)
+#### Router (`router/router.go`)
+- **Single source of truth for all route definitions.**
+- Receives handler structs and `*config.Config` via constructor; returns a ready `*gin.Engine`.
+- Adding a new handler group means editing only this file — never `serve.go`.
+
+#### Middleware Agent
+- `middleware/auth.go` — validates `ory_kratos_session` cookie via Kratos FrontendAPI.
+- Injects `*ory.Identity` into `gin.Context` under the key `"user"`.
+- Rejects unverified identities with `403 Forbidden`.
+
+#### Handler Agent
+- Maps HTTP routes to **Service** methods.
+- Handles multipart form binding and JSON binding.
+- Returns standardised responses via `utils.RespondOK` / `utils.RespondError`.
+- `POST /workspaces/:id/invites` responds `202 Accepted` immediately — email delivery is async.
+
+#### Utils
+- `utils/cors.go` — origin-whitelist CORS middleware.
+- `utils/respond.go` / `utils/response.go` — typed response helpers.
+
+### C. Worker Layer (Async Consumers)
+**Location:** `internal/worker/`
+- **Role:** Long-running background goroutines that consume RabbitMQ queues.
+- **Rules:**
+    - Each worker is started by `serve.go` in its own goroutine and respects `context.Context` cancellation for graceful shutdown.
+    - Workers depend on **Repository** and **Infrastructure** interfaces only — never on Handler or Service types.
+    - Workers must NOT import from `internal/transport/` or `internal/service/`.
+    - A worker failure (e.g. email delivery) must never crash the process — log, nack (with or without requeue), and continue.
+
+#### InviteWorker (`invite_worker.go`)
+- Consumes the `workspace.invites` queue.
+- For each delivery: renders and sends the invite email via `domain.Mailer`, then acks.
+- On send failure: nacks with requeue for retry.
+- On malformed payload: nacks without requeue (dead-letter).
+
+#### InviteEvent (message contract)
+```go
+type InviteEvent struct {
+    Token         string `json:"token"`
+    WorkspaceID   string `json:"workspace_id"`
+    WorkspaceName string `json:"workspace_name"`
+    Email         string `json:"email"`
+    Role          string `json:"role"`
+    ExpiresAt     string `json:"expires_at"` // RFC3339
+    InviteBaseURL string `json:"invite_base_url"`
+}
+```
+> **Note:** `InviteEvent` is currently duplicated between `internal/worker/` and `internal/service/` to avoid a cross-layer import. If the contract grows, move it to `internal/domain/events.go` and import from there.
+
+### D. Service Layer (Business Logic)
 **Location:** `internal/service/`
 - **Role:** The "Brain" of the application. Coordinates data flow between Domain and Infrastructure.
 - **Rules:**
     - Must NOT know about Gin, SQL, Ory SDKs, or SMTP internals.
-    - Works only with **Domain Entities** and **Interfaces** (`domain.ProfileRepository`, `domain.Storage`, `domain.Mailer`, …).
-    - Implements core logic (e.g., "Can this user upload a video?", "Send welcome email after workspace creation").
-    - Receives `domain.Mailer` via constructor injection when email dispatch is needed.
+    - Works only with **Domain Entities** and **Interfaces** (`domain.ProfileRepository`, `domain.Storage`, …).
+    - May depend on `*rabbitmq.Client` for event publishing — this is an infrastructure type, not a domain type, but it is acceptable here because RabbitMQ is treated as a messaging bus, not a data store.
+    - Must NOT import from `internal/worker/` or `internal/transport/`.
 
-### D. Domain Layer (Core)
+#### WorkspaceService
+- `InviteUser` — persists the invite record, then publishes an `InviteEvent` to the `workspace.invites` queue. Email delivery is fully asynchronous.
+- If `*rabbitmq.Client` is `nil` (RabbitMQ unavailable at startup), the invite is saved but no event is published and a warning is logged. The service degrades gracefully.
+- `InviteUser` no longer calls `domain.Mailer` directly. The `Mailer` dependency has been removed from `workspaceService`.
+
+### E. Domain Layer (Core)
 **Location:** `internal/domain/`
 - **Role:** Defines the "Language" of the project.
 - **Rules:**
@@ -88,7 +135,7 @@ This document defines the responsibilities for each module in the project. We fo
     - **NO SLOPPY TYPING:** Strictly **PROHIBITED** to use `map[string]interface{}` or `map[string]any` for Domain Entities or API payloads. Everything must be a named `struct`.
     - **Repository Interfaces:** `ProfileRepository`, `WorkspaceRepository`, `UserRepository`.
     - **Service Interfaces:** `ProfileService`, `WorkspaceService`.
-    - **Port Interfaces:** `Storage`, `Mailer` — infrastructure ports consumed by services.
+    - **Port Interfaces:** `Storage`, `Mailer` — infrastructure ports consumed by services and workers.
     - No external dependencies allowed here.
 
 #### Mailer Port (`domain/mailer.go`)
@@ -107,7 +154,7 @@ type Mailer interface {
 }
 ```
 
-### E. Infrastructure Layer (Adapters)
+### F. Infrastructure Layer (Adapters)
 **Location:** `internal/infrastructure/`
 
 #### Database Agent (`db/`)
@@ -117,7 +164,7 @@ type Mailer interface {
 - **SEPARATION:** Migrations are triggered only by `api migrate up` / `api migrate down`.
 
 #### Mailer Agent (`mailer/`)
-- Single file `mailer.go` — one SMTP adapter, one constructor: `New(*config.MailerConfig) (domain.Mailer, error)`.
+- Single file `smtp.go` — one SMTP adapter, one constructor: `New(*config.MailerConfig) (domain.Mailer, error)`.
 - **Behaviour adapts automatically to config — no provider switch needed:**
     - `MAILER_USERNAME` empty → no auth (Mailhog, local dev).
     - `MAILER_USERNAME` set → `smtp.PlainAuth` (real provider with STARTTLS).
@@ -138,7 +185,8 @@ type Mailer interface {
 
 #### RabbitMQ Agent (`rabbitmq/`)
 - Optional dependency — if the broker is unavailable at startup, the container degrades gracefully (no panic).
-- Exposes `Publish` and `DeclareQueue` behind a mutex-protected `amqp.Channel`.
+- Exposes `Publish`, `DeclareQueue`, and `Consume` behind a mutex-protected `amqp.Channel`.
+- `Consume` is used exclusively by workers in `internal/worker/` — handlers and services only call `Publish`.
 
 ---
 
@@ -154,21 +202,44 @@ type Mailer interface {
 | `Mailer`   | `domain.Mailer`   | `mailer.New(&cfg.Mailer)`       |
 | `RabbitMQ` | `*rabbitmq.Client`| optional, degrades gracefully   |
 
-Services receive only the interfaces they need — never the full container.
+Services receive only the dependencies they need — never the full container.
+
+- `WorkspaceService` receives `*rabbitmq.Client` (for publishing) and **not** `domain.Mailer`.
+- `InviteWorker` receives `*rabbitmq.Client` (for consuming), `domain.WorkspaceRepository`, and `domain.Mailer`.
 
 ---
 
-## 4. Communication Patterns
+## 4. Invite Flow (Async)
+
+```
+Handler (POST /workspaces/:id/invites)
+  → WorkspaceService.InviteUser
+      → repo.CreateInvite          (persist to DB)
+      → rbmq.Publish               (enqueue InviteEvent)
+  ← 202 Accepted
+
+InviteWorker (goroutine)
+  → rbmq.Consume (workspace.invites)
+      → mailer.Send                (deliver email)
+      → msg.Ack / msg.Nack
+```
+
+The handler returns immediately after the DB write. Email delivery failures do not affect the HTTP response and are retried via nack+requeue.
+
+---
+
+## 5. Communication Patterns
 
 1. **Strong Typing Everywhere:** All data passing between layers (Transport → Service → Infrastructure) uses internal Domain structs.
 2. **Dependency Injection:** All dependencies (DB, Storage, Mailer, …) are passed via `New…` constructors.
-3. **Context Propagation:** `context.Context` is always threaded from the Gin handler down to GORM queries and `Mailer.Send`.
+3. **Context Propagation:** `context.Context` is always threaded from the Gin handler down to GORM queries, `Mailer.Send`, and worker loops.
 4. **Ory Integration:** Kratos Admin API is accessed via typed SDK structs — no raw maps for identity traits.
-5. **Graceful Degradation:** Optional infrastructure (RabbitMQ) must not prevent startup on failure.
+5. **Graceful Degradation:** Optional infrastructure (RabbitMQ) must not prevent startup on failure. Workers are only started when `container.RabbitMQ != nil`.
+6. **Async by default for side effects:** Operations that touch external systems (email, future webhooks) are published to a queue and handled by workers — never blocking the HTTP response.
 
 ---
 
-## 5. Configuration Reference
+## 6. Configuration Reference
 
 Relevant env vars for the Mailer (see `.env` and `config/config.go`):
 
@@ -182,7 +253,7 @@ Relevant env vars for the Mailer (see `.env` and `config/config.go`):
 
 ---
 
-## 6. Technology Stack
+## 7. Technology Stack
 
 | Concern       | Tool                                                                 |
 |---------------|----------------------------------------------------------------------|

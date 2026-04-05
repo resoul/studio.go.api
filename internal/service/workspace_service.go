@@ -4,26 +4,31 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/resoul/studio.go.api/internal/domain"
+	"github.com/resoul/studio.go.api/internal/infrastructure/rabbitmq"
 	"github.com/sirupsen/logrus"
 )
+
+const inviteQueue = "workspace.invites"
 
 type workspaceService struct {
 	repo    domain.WorkspaceRepository
 	storage domain.Storage
-	mailer  domain.Mailer
+	rbmq    *rabbitmq.Client // optional — nil when RabbitMQ is unavailable
 }
 
-func NewWorkspaceService(repo domain.WorkspaceRepository, storage domain.Storage, mailer domain.Mailer) domain.WorkspaceService {
+func NewWorkspaceService(repo domain.WorkspaceRepository, storage domain.Storage, rbmq *rabbitmq.Client) domain.WorkspaceService {
 	return &workspaceService{
 		repo:    repo,
 		storage: storage,
-		mailer:  mailer,
+		rbmq:    rbmq,
 	}
 }
 
@@ -102,6 +107,9 @@ func (s *workspaceService) ListForUser(ctx context.Context, userID string) ([]do
 	return workspaces, nil
 }
 
+// InviteUser persists the invite record and publishes an event to RabbitMQ.
+// Email delivery is handled asynchronously by InviteWorker.
+// If RabbitMQ is unavailable the invite is still saved — email just won't be sent.
 func (s *workspaceService) InviteUser(ctx context.Context, input domain.CreateInviteInput) (*domain.WorkspaceInvite, error) {
 	token, err := generateRandomToken(32)
 	if err != nil {
@@ -122,47 +130,62 @@ func (s *workspaceService) InviteUser(ctx context.Context, input domain.CreateIn
 	}
 
 	if input.SendEmail {
-		if err := s.sendInviteEmail(ctx, invite, input.InviteBaseURL); err != nil {
-			// Non-fatal: invite is saved, email failure should not roll back.
-			logrus.WithError(err).
-				WithField("invite_token", token).
-				WithField("email", input.Email).
-				Warn("invite created but email delivery failed")
-		}
+		s.publishInviteEvent(ctx, invite, input)
 	}
 
 	return invite, nil
 }
 
-func (s *workspaceService) sendInviteEmail(ctx context.Context, invite *domain.WorkspaceInvite, baseURL string) error {
-	ws, err := s.repo.FindByID(ctx, invite.WorkspaceID)
-	if err != nil {
-		return fmt.Errorf("could not load workspace for invite email: %w", err)
+// publishInviteEvent enqueues the email delivery task.
+// Failures are non-fatal — the invite record already exists.
+func (s *workspaceService) publishInviteEvent(ctx context.Context, invite *domain.WorkspaceInvite, input domain.CreateInviteInput) {
+	if s.rbmq == nil {
+		logrus.WithField("token", invite.Token).Warn("RabbitMQ unavailable, invite email will not be sent")
+		return
 	}
 
-	link := fmt.Sprintf("%s/invites/%s", strings.TrimRight(baseURL, "/"), invite.Token)
-	expiresIn := "7 days"
+	ws, err := s.repo.FindByID(ctx, invite.WorkspaceID)
+	if err != nil {
+		logrus.WithError(err).WithField("workspace_id", invite.WorkspaceID).Warn("could not load workspace for invite event")
+		return
+	}
 
-	html := fmt.Sprintf(`<!DOCTYPE html>
-<html>
-<body style="font-family:sans-serif;color:#1a1a1a;max-width:480px;margin:0 auto;padding:32px 16px">
-  <h2 style="margin-bottom:8px">You've been invited</h2>
-  <p>You have been invited to join <strong>%s</strong> as <strong>%s</strong>.</p>
-  <p style="margin:24px 0">
-    <a href="%s"
-       style="background:#18181b;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600">
-      Accept Invitation
-    </a>
-  </p>
-  <p style="color:#71717a;font-size:13px">This link expires in %s. If you did not expect this invitation, you can ignore this email.</p>
-</body>
-</html>`, ws.Name, string(invite.Role), link, expiresIn)
+	// InviteEvent mirrors worker.InviteEvent — defined here to avoid an import cycle.
+	// Both structs must stay in sync; consider moving to domain/ if they drift.
+	type inviteEvent struct {
+		Token         string `json:"token"`
+		WorkspaceID   string `json:"workspace_id"`
+		WorkspaceName string `json:"workspace_name"`
+		Email         string `json:"email"`
+		Role          string `json:"role"`
+		ExpiresAt     string `json:"expires_at"`
+		InviteBaseURL string `json:"invite_base_url"`
+	}
 
-	return s.mailer.Send(ctx, domain.MailMessage{
-		To:      []string{invite.Email},
-		Subject: fmt.Sprintf("You've been invited to %s", ws.Name),
-		HTML:    html,
+	payload, err := json.Marshal(inviteEvent{
+		Token:         invite.Token,
+		WorkspaceID:   invite.WorkspaceID.String(),
+		WorkspaceName: ws.Name,
+		Email:         invite.Email,
+		Role:          string(invite.Role),
+		ExpiresAt:     invite.ExpiresAt.Format(time.RFC3339),
+		InviteBaseURL: input.InviteBaseURL,
 	})
+	if err != nil {
+		logrus.WithError(err).Warn("could not marshal invite event")
+		return
+	}
+
+	if err := s.rbmq.Publish(ctx, "", inviteQueue, false, false, amqp.Publishing{
+		ContentType:  "application/json",
+		DeliveryMode: amqp.Persistent,
+		Body:         payload,
+	}); err != nil {
+		logrus.WithError(err).
+			WithField("token", invite.Token).
+			WithField("email", invite.Email).
+			Warn("invite created but event publish failed")
+	}
 }
 
 func (s *workspaceService) PreviewInvite(ctx context.Context, token string) (*domain.Workspace, int64, error) {

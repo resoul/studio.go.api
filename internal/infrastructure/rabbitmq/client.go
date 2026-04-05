@@ -62,3 +62,9 @@ func (c *Client) DeclareQueue(name string, durable, autoDelete, exclusive, noWai
 	defer c.mu.RUnlock()
 	return c.channel.QueueDeclare(name, durable, autoDelete, exclusive, noWait, args)
 }
+
+func (c *Client) Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.channel.Consume(queue, consumer, autoAck, exclusive, noLocal, noWait, args)
+}
