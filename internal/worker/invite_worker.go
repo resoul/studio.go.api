@@ -18,21 +18,9 @@ const (
 	inviteExchange = ""
 )
 
-// InviteEvent is the message published to RabbitMQ by WorkspaceService.InviteUser.
-// Using a concrete struct keeps the contract explicit — no map[string]any.
-type InviteEvent struct {
-	Token         string `json:"token"`
-	WorkspaceID   string `json:"workspace_id"`
-	WorkspaceName string `json:"workspace_name"`
-	Email         string `json:"email"`
-	Role          string `json:"role"`
-	ExpiresAt     string `json:"expires_at"` // RFC3339
-	InviteBaseURL string `json:"invite_base_url"`
-}
-
 // InviteWorker consumes workspace.invites events and dispatches the invite email.
-// DB persistence happens in the service before publishing, so this worker is
-// responsible only for email delivery — a failure here does not affect the invite record.
+// DB persistence happens in the service before publishing — this worker is
+// responsible only for delivery. A failure here does not affect the invite record.
 type InviteWorker struct {
 	rbmq   *rabbitmq.Client
 	repo   domain.WorkspaceRepository
@@ -74,9 +62,9 @@ func (w *InviteWorker) Start(ctx context.Context) {
 }
 
 func (w *InviteWorker) handle(ctx context.Context, msg amqp.Delivery) {
-	var event InviteEvent
+	var event domain.InviteEvent
 	if err := json.Unmarshal(msg.Body, &event); err != nil {
-		logrus.WithError(err).Error("invite worker: malformed message, nacking")
+		logrus.WithError(err).Error("invite worker: malformed message, nacking without requeue")
 		_ = msg.Nack(false, false) // dead-letter, don't requeue garbage
 		return
 	}
@@ -94,14 +82,13 @@ func (w *InviteWorker) handle(ctx context.Context, msg amqp.Delivery) {
 	logrus.WithField("email", event.Email).Info("invite worker: invite email sent")
 }
 
-func (w *InviteWorker) sendInviteEmail(ctx context.Context, event InviteEvent) error {
+func (w *InviteWorker) sendInviteEmail(ctx context.Context, event domain.InviteEvent) error {
 	link := fmt.Sprintf("%s/invites/%s", strings.TrimRight(event.InviteBaseURL, "/"), event.Token)
 
 	expiresAt, _ := time.Parse(time.RFC3339, event.ExpiresAt)
 	expiresIn := "7 days"
 	if !expiresAt.IsZero() {
-		remaining := time.Until(expiresAt)
-		if h := int(remaining.Hours()); h > 0 {
+		if h := int(time.Until(expiresAt).Hours()); h > 0 {
 			expiresIn = fmt.Sprintf("%d hours", h)
 		}
 	}

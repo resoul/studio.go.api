@@ -1,6 +1,8 @@
-# Agents.md: Architectural Roles and Boundaries
+# AGENTS.md: Architectural Roles and Boundaries
 
-This document defines the responsibilities for each module in the project. We follow **Clean Architecture** (Ports & Adapters) principles to ensure the business logic remains decoupled from external tools like Ory, Gin, or GORM.
+This document defines the responsibilities for each module in the project.
+We follow **Clean Architecture** (Ports & Adapters) principles — business logic stays decoupled from
+external tools like Ory, Gin, or GORM.
 
 ---
 
@@ -10,10 +12,12 @@ This document defines the responsibilities for each module in the project. We fo
 .
 ├── cmd/
 │   ├── root.go             # Cobra root command, WaitGroup injection
-│   ├── serve.go            # HTTP server lifecycle only — no route wiring
-│   └── migrate.go          # Migration CLI commands (up / down)
-├── internal/               # Private code
-│   ├── domain/             # Entities, Repository Interfaces, Service Interfaces
+│   ├── serve.go            # HTTP server lifecycle — no route wiring, no business logic
+│   └── migrate.go          # Migration CLI (up / down), never shares serve-time container
+├── internal/
+│   ├── domain/             # Entities, Repository Interfaces, Service Interfaces, Ports
+│   │   ├── errors.go       # Sentinel errors (ErrNotFound, ErrConflict, …)
+│   │   ├── events.go       # Message contracts (InviteEvent) — single source of truth
 │   │   ├── mailer.go       # Mailer port (MailMessage, Mailer interface)
 │   │   ├── profile.go
 │   │   ├── user.go
@@ -24,82 +28,214 @@ This document defines the responsibilities for each module in the project. We fo
 │   ├── worker/             # Async background consumers (RabbitMQ)
 │   │   └── invite_worker.go
 │   ├── infrastructure/     # External adapters
-│   │   ├── db/             # GORM / PostgreSQL
+│   │   ├── db/
 │   │   │   ├── migrations/
 │   │   │   ├── profile_repository.go
 │   │   │   └── workspace_repository.go
-│   │   ├── mailer/         # Email delivery
-│   │   │   └── smtp.go     # SMTP adapter (Mailhog + real providers)
-│   │   ├── ory/            # Ory Kratos identity adapter
-│   │   ├── rabbitmq/       # AMQP client
-│   │   └── storage/        # MinIO / S3-compatible storage
+│   │   ├── mailer/
+│   │   │   └── smtp.go
+│   │   ├── ory/
+│   │   │   └── kratos.go
+│   │   ├── rabbitmq/
+│   │   │   └── client.go
+│   │   └── storage/
+│   │       └── minio.go
 │   ├── di/
-│   │   └── container.go    # Dependency injection container
+│   │   └── container.go    # Composition root — holds all singletons
 │   ├── config/
 │   │   └── config.go       # Env-based config (envconfig + godotenv)
 │   └── transport/
-│       └── http/           # Gin routes, handlers, middleware
+│       └── http/
 │           ├── router/
-│           │   └── router.go   # All route wiring lives here
+│           │   └── router.go       # All route wiring — single source of truth
 │           ├── handlers/
+│           │   ├── profile_handler.go
+│           │   ├── workspace_handler.go  # Workspace CRUD + config
+│           │   ├── invite_handler.go     # Invite lifecycle
+│           │   └── member_handler.go     # Member management
 │           ├── middleware/
-│           └── utils/      # CORS, respond helpers, error types
-├── pkg/                    # Public helper libraries
-├── configs/                # YAML / Env configuration files
-└── deployments/            # Docker Compose & K8s manifests
+│           │   └── auth.go
+│           └── utils/
+│               ├── cors.go
+│               ├── errors.go       # MapError + RespondMapped
+│               ├── respond.go
+│               └── response.go
+├── pkg/
+├── configs/
+└── deployments/
 ```
 
 ---
 
 ## 2. Layer Responsibilities
 
-### A. CLI & Entry Point (Cobra)
-**Location:** `cmd/`
-- **Role:** Application startup, flag parsing, and dependency injection.
-- **Rules:**
-    - `serve.go` — initialises `di.Container`, wires repositories → services → handlers, starts the router and the HTTP server. Starts background workers in goroutines. Contains no route definitions.
-    - `migrate.go` — opens a raw GORM connection and runs `gormigrate` commands; never shares the serve-time container.
-    - No business logic here — delegate everything to the Service layer.
+### A. CLI & Entry Point (`cmd/`)
 
-### B. Transport Layer (Gin)
-**Location:** `internal/transport/http/`
+- `serve.go` — initialises `di.Container`, wires repositories → services → handlers, starts the
+  router and HTTP server, starts background workers in goroutines. **No route definitions here.**
+- `migrate.go` — opens a raw GORM connection and runs `gormigrate` commands; never shares the
+  serve-time container.
+- **No business logic in `cmd/`** — delegate everything to the Service layer.
+
+### B. Domain Layer (`internal/domain/`)
+
+The "language" of the project. **No external dependencies allowed here.**
+
+| File | Contents |
+|------|----------|
+| `errors.go` | Sentinel errors: `ErrNotFound`, `ErrConflict`, `ErrForbidden`, `ErrUnauthorized`, `ErrInvalidInput`, `ErrInviteExpired`, `ErrOwnerCannotBeRemoved` |
+| `events.go` | `InviteEvent` — the message contract between service and worker |
+| `mailer.go` | `MailMessage`, `Mailer` interface |
+| `profile.go` | `Profile` entity, `ProfileRepository`, `ProfileService`, `UpdateProfileInput` |
+| `user.go` | `User` entity, `UserRepository` |
+| `workspace.go` | `Workspace`, `WorkspaceMember`, `WorkspaceInvite`, `UserWorkspaceConfig`, repository/service interfaces, all input structs, `Storage` port |
+
+**Hard rules:**
+- **PROHIBITED:** `map[string]interface{}` or `map[string]any` for entities or API payloads. Use named structs.
+- **PROHIBITED:** importing from `service/`, `worker/`, `transport/`, or `infrastructure/`.
+
+### C. Service Layer (`internal/service/`)
+
+Business logic. Coordinates domain entities and repository/port interfaces.
+
+**Hard rules:**
+- Must NOT know about Gin, SQL, Ory SDKs, or SMTP internals.
+- Returns `domain` sentinel errors (e.g. `domain.ErrNotFound`) — never raw strings that embed
+  status codes.
+- May depend on `*rabbitmq.Client` for event publishing (messaging bus, not a data store).
+- Must NOT import from `worker/` or `transport/`.
+
+#### WorkspaceService
+- `InviteUser` — persists the invite, publishes a `domain.InviteEvent` to `workspace.invites`.
+- `RemoveMember` — returns `domain.ErrOwnerCannotBeRemoved` when target is the workspace owner.
+- If `*rabbitmq.Client` is `nil`, invite is saved but no event is published (graceful degradation).
+
+### D. Worker Layer (`internal/worker/`)
+
+Long-running background goroutines consuming RabbitMQ queues.
+
+**Hard rules:**
+- Started by `serve.go`, respect `context.Context` cancellation for graceful shutdown.
+- Depend only on **Repository** and **Infrastructure** interfaces — never on handlers or services.
+- Must NOT import from `transport/` or `service/`.
+- A worker failure (e.g. email delivery) must never crash the process — log, nack, continue.
+
+#### InviteWorker
+- Consumes `workspace.invites`.
+- Unmarshals `domain.InviteEvent` (single source of truth in `domain/events.go`).
+- On send success: `msg.Ack`.
+- On send failure: `msg.Nack(requeue=true)` — retry.
+- On malformed payload: `msg.Nack(requeue=false)` — dead-letter.
+
+### E. Transport Layer (`internal/transport/http/`)
 
 #### Router (`router/router.go`)
-- **Single source of truth for all route definitions.**
-- Receives handler structs and `*config.Config` via constructor; returns a ready `*gin.Engine`.
-- Adding a new handler group means editing only this file — never `serve.go`.
+Single source of truth for all route definitions. Receives handler structs and `*config.Config`
+via constructor; returns a ready `*gin.Engine`. Adding a new endpoint means editing only this file.
 
-#### Middleware Agent
-- `middleware/auth.go` — validates `ory_kratos_session` cookie via Kratos FrontendAPI.
-- Injects `*ory.Identity` into `gin.Context` under the key `"user"`.
+#### Handlers
+
+Split by resource to keep files small and focused:
+
+| File | Routes |
+|------|--------|
+| `profile_handler.go` | `GET /user/me`, `PATCH /user/profile` |
+| `workspace_handler.go` | Workspace CRUD, current workspace, config |
+| `invite_handler.go` | Preview, accept, create, list, resend, revoke invites |
+| `member_handler.go` | List members, remove member |
+
+**Handler contract:**
+1. Extract identity from context.
+2. Bind and validate request (JSON or multipart).
+3. Call the service method.
+4. On error → `utils.RespondMapped(c, err)` — never hand-code status codes for domain errors.
+5. On success → `utils.RespondOK` / `utils.RespondCreated` / `c.Status(204)`.
+
+#### Error Mapping (`utils/errors.go`)
+
+`MapError(err) HTTPError` converts domain sentinel errors to HTTP status codes:
+
+| Domain error | HTTP status |
+|---|---|
+| `ErrNotFound` / `gorm.ErrRecordNotFound` | 404 |
+| `ErrConflict` | 409 |
+| `ErrUnauthorized` | 401 |
+| `ErrForbidden` | 403 |
+| `ErrInvalidInput` | 400 |
+| `ErrInviteExpired` | 410 |
+| `ErrOwnerCannotBeRemoved` | 422 |
+| anything else | 500 |
+
+Use `utils.RespondMapped(c, err)` in handlers — never duplicate this table in handler code.
+
+#### Middleware (`middleware/auth.go`)
+- Validates `ory_kratos_session` cookie via Kratos `FrontendAPI`.
+- Injects `*ory.Identity` into `gin.Context["user"]`.
 - Rejects unverified identities with `403 Forbidden`.
 
-#### Handler Agent
-- Maps HTTP routes to **Service** methods.
-- Handles multipart form binding and JSON binding.
-- Returns standardised responses via `utils.RespondOK` / `utils.RespondError`.
-- `POST /workspaces/:id/invites` responds `202 Accepted` immediately — email delivery is async.
-
 #### Utils
-- `utils/cors.go` — origin-whitelist CORS middleware.
-- `utils/respond.go` / `utils/response.go` — typed response helpers.
+- `cors.go` — origin-whitelist CORS middleware.
+- `respond.go` / `response.go` — `RespondOK`, `RespondError`, `RespondCreated`, `ErrorResponse`.
+- `errors.go` — `MapError`, `RespondMapped`.
 
-### C. Worker Layer (Async Consumers)
-**Location:** `internal/worker/`
-- **Role:** Long-running background goroutines that consume RabbitMQ queues.
-- **Rules:**
-    - Each worker is started by `serve.go` in its own goroutine and respects `context.Context` cancellation for graceful shutdown.
-    - Workers depend on **Repository** and **Infrastructure** interfaces only — never on Handler or Service types.
-    - Workers must NOT import from `internal/transport/` or `internal/service/`.
-    - A worker failure (e.g. email delivery) must never crash the process — log, nack (with or without requeue), and continue.
+### F. Infrastructure Layer (`internal/infrastructure/`)
 
-#### InviteWorker (`invite_worker.go`)
-- Consumes the `workspace.invites` queue.
-- For each delivery: renders and sends the invite email via `domain.Mailer`, then acks.
-- On send failure: nacks with requeue for retry.
-- On malformed payload: nacks without requeue (dead-letter).
+#### Database (`db/`)
+- Implements `ProfileRepository` and `WorkspaceRepository` via GORM.
+- **FORBIDDEN:** `db.AutoMigrate()` inside application startup.
+- All schema changes live in `db/migrations/` as explicit `gormigrate` entries.
+- Migrations run only via `api migrate up` / `api migrate down`.
 
-#### InviteEvent (message contract)
+#### Mailer (`mailer/smtp.go`)
+- One SMTP adapter, one constructor: `New(*config.MailerConfig) (domain.Mailer, error)`.
+- Behaviour adapts automatically to config:
+    - No `MAILER_USERNAME` → no auth (Mailhog / local dev).
+    - `MAILER_USERNAME` set → `smtp.PlainAuth` (STARTTLS providers).
+    - `MAILER_PORT=465` → implicit TLS via `crypto/tls`.
+- Assembles `multipart/alternative` MIME (HTML + auto-generated plain-text fallback).
+- **To switch from Mailhog to a real provider** — update `.env` only; no code changes.
+
+#### Ory (`ory/kratos.go`)
+- Wraps the Ory Kratos Admin API SDK.
+- Implements `domain.UserRepository` (`FindByID`, `GetIdentity`).
+- Uses typed structs mirroring `identity.schema.json` — no raw maps for traits.
+
+#### Storage (`storage/minio.go`)
+- Implements `domain.Storage` via MinIO client.
+- Manages buckets (`workspaces`, `profiles`): creates them and sets public-read policy on startup.
+- `GetPresignedURL` uses `STORAGE_PUBLIC_BASE_URL` (configurable for local vs. cloud).
+
+#### RabbitMQ (`rabbitmq/client.go`)
+- Optional — if the broker is unavailable at startup, the container degrades gracefully.
+- Exposes `Publish`, `DeclareQueue`, `Consume` behind a mutex-protected channel.
+- `Consume` is used exclusively by workers — handlers and services only call `Publish`.
+
+---
+
+## 3. Dependency Injection (`di/Container`)
+
+`Container` is the single composition root.
+
+| Field | Type | Source |
+|-------|------|--------|
+| `Config` | `*config.Config` | `config.Init(ctx)` |
+| `DB` | `*gorm.DB` | `postgres.Open(cfg.DB.DSN)` |
+| `Storage` | `domain.Storage` | `storage.NewMinioStorage(cfg)` |
+| `Mailer` | `domain.Mailer` | `mailer.New(&cfg.Mailer)` |
+| `RabbitMQ` | `*rabbitmq.Client` | optional, degrades gracefully |
+
+Services receive only the dependencies they need — **never the full container**.
+
+- `WorkspaceService` receives `*rabbitmq.Client` (publish) and **not** `domain.Mailer`.
+- `InviteWorker` receives `*rabbitmq.Client` (consume), `domain.WorkspaceRepository`, `domain.Mailer`.
+
+---
+
+## 4. Event Contract
+
+`domain.InviteEvent` in `internal/domain/events.go` is the **single source of truth** for the
+message published by `WorkspaceService` and consumed by `InviteWorker`.
+
 ```go
 type InviteEvent struct {
     Token         string `json:"token"`
@@ -111,158 +247,87 @@ type InviteEvent struct {
     InviteBaseURL string `json:"invite_base_url"`
 }
 ```
-> **Note:** `InviteEvent` is currently duplicated between `internal/worker/` and `internal/service/` to avoid a cross-layer import. If the contract grows, move it to `internal/domain/events.go` and import from there.
 
-### D. Service Layer (Business Logic)
-**Location:** `internal/service/`
-- **Role:** The "Brain" of the application. Coordinates data flow between Domain and Infrastructure.
-- **Rules:**
-    - Must NOT know about Gin, SQL, Ory SDKs, or SMTP internals.
-    - Works only with **Domain Entities** and **Interfaces** (`domain.ProfileRepository`, `domain.Storage`, …).
-    - May depend on `*rabbitmq.Client` for event publishing — this is an infrastructure type, not a domain type, but it is acceptable here because RabbitMQ is treated as a messaging bus, not a data store.
-    - Must NOT import from `internal/worker/` or `internal/transport/`.
-
-#### WorkspaceService
-- `InviteUser` — persists the invite record, then publishes an `InviteEvent` to the `workspace.invites` queue. Email delivery is fully asynchronous.
-- If `*rabbitmq.Client` is `nil` (RabbitMQ unavailable at startup), the invite is saved but no event is published and a warning is logged. The service degrades gracefully.
-- `InviteUser` no longer calls `domain.Mailer` directly. The `Mailer` dependency has been removed from `workspaceService`.
-
-### E. Domain Layer (Core)
-**Location:** `internal/domain/`
-- **Role:** Defines the "Language" of the project.
-- **Rules:**
-    - **Entities:** Simple Go structs (`Profile`, `Workspace`, `WorkspaceMember`, `WorkspaceInvite`, `UserWorkspaceConfig`, `User`).
-    - **NO SLOPPY TYPING:** Strictly **PROHIBITED** to use `map[string]interface{}` or `map[string]any` for Domain Entities or API payloads. Everything must be a named `struct`.
-    - **Repository Interfaces:** `ProfileRepository`, `WorkspaceRepository`, `UserRepository`.
-    - **Service Interfaces:** `ProfileService`, `WorkspaceService`.
-    - **Port Interfaces:** `Storage`, `Mailer` — infrastructure ports consumed by services and workers.
-    - No external dependencies allowed here.
-
-#### Mailer Port (`domain/mailer.go`)
-```go
-type MailMessage struct {
-    To      []string
-    Subject string
-    HTML    string   // rendered HTML body
-    Text    string   // optional plain-text fallback
-    ReplyTo string
-    CC      []string
-}
-
-type Mailer interface {
-    Send(ctx context.Context, msg MailMessage) error
-}
-```
-
-### F. Infrastructure Layer (Adapters)
-**Location:** `internal/infrastructure/`
-
-#### Database Agent (`db/`)
-- Implements `ProfileRepository` and `WorkspaceRepository` using GORM.
-- **MIGRATIONS RULE:** Strictly **FORBIDDEN** to use `db.AutoMigrate()` inside the application startup flow.
-- **MIGRATION TOOL:** All schema changes live in `db/migrations/` as explicit `gormigrate` entries.
-- **SEPARATION:** Migrations are triggered only by `api migrate up` / `api migrate down`.
-
-#### Mailer Agent (`mailer/`)
-- Single file `smtp.go` — one SMTP adapter, one constructor: `New(*config.MailerConfig) (domain.Mailer, error)`.
-- **Behaviour adapts automatically to config — no provider switch needed:**
-    - `MAILER_USERNAME` empty → no auth (Mailhog, local dev).
-    - `MAILER_USERNAME` set → `smtp.PlainAuth` (real provider with STARTTLS).
-    - `MAILER_PORT=465` → implicit TLS via `crypto/tls` (e.g. Gmail SMTP, Brevo).
-    - Any other port → `net/smtp.SendMail` with optional auth (STARTTLS negotiated by server).
-- Assembles `multipart/alternative` MIME (HTML + auto-generated plain-text fallback).
-- **To switch from Mailhog to a real provider** — update `.env` only; no code changes required.
-
-#### Ory Agent (`ory/`)
-- Wraps the Ory Kratos Admin API SDK.
-- Implements `domain.UserRepository` (`FindByID`, `GetIdentity`).
-- Uses typed structs mirroring `identity.schema.json` — never raw maps for traits.
-
-#### Storage Agent (`storage/`)
-- Implements `domain.Storage` via MinIO client.
-- Manages buckets (`workspaces`, `profiles`): creates them and sets public-read policy on startup.
-- `GetPresignedURL` returns a public URL using `STORAGE_PUBLIC_BASE_URL` (configurable for local vs. cloud).
-
-#### RabbitMQ Agent (`rabbitmq/`)
-- Optional dependency — if the broker is unavailable at startup, the container degrades gracefully (no panic).
-- Exposes `Publish`, `DeclareQueue`, and `Consume` behind a mutex-protected `amqp.Channel`.
-- `Consume` is used exclusively by workers in `internal/worker/` — handlers and services only call `Publish`.
+> When adding a new async event, create its contract struct in `domain/events.go` first,
+> then reference it from both the publishing service and the consuming worker.
 
 ---
 
-## 3. Dependency Injection (`di/Container`)
-
-`Container` is the single composition root. It holds:
-
-| Field      | Type              | Source                          |
-|------------|-------------------|---------------------------------|
-| `Config`   | `*config.Config`  | `config.Init(ctx)`              |
-| `DB`       | `*gorm.DB`        | `postgres.Open(cfg.DB.DSN)`     |
-| `Storage`  | `domain.Storage`  | `storage.NewMinioStorage(cfg)`  |
-| `Mailer`   | `domain.Mailer`   | `mailer.New(&cfg.Mailer)`       |
-| `RabbitMQ` | `*rabbitmq.Client`| optional, degrades gracefully   |
-
-Services receive only the dependencies they need — never the full container.
-
-- `WorkspaceService` receives `*rabbitmq.Client` (for publishing) and **not** `domain.Mailer`.
-- `InviteWorker` receives `*rabbitmq.Client` (for consuming), `domain.WorkspaceRepository`, and `domain.Mailer`.
-
----
-
-## 4. Invite Flow (Async)
+## 5. Invite Flow (Async)
 
 ```
 Handler (POST /workspaces/:id/invites)
   → WorkspaceService.InviteUser
       → repo.CreateInvite          (persist to DB)
-      → rbmq.Publish               (enqueue InviteEvent)
+      → rbmq.Publish               (enqueue domain.InviteEvent)
   ← 202 Accepted
 
 InviteWorker (goroutine)
   → rbmq.Consume (workspace.invites)
-      → mailer.Send                (deliver email)
+      → json.Unmarshal → domain.InviteEvent
+      → mailer.Send
       → msg.Ack / msg.Nack
 ```
 
-The handler returns immediately after the DB write. Email delivery failures do not affect the HTTP response and are retried via nack+requeue.
+---
+
+## 6. Communication Patterns
+
+1. **Strong Typing Everywhere** — all inter-layer data uses domain structs. No `map[string]any`.
+2. **Dependency Injection** — all dependencies passed via `New…` constructors.
+3. **Context Propagation** — `context.Context` threaded from handler down to GORM, Mailer, workers.
+4. **Sentinel Errors** — services return `domain.Err*` values; the transport layer maps them to
+   HTTP codes via `utils.MapError`. Never hand-code HTTP status codes for domain conditions.
+5. **Graceful Degradation** — optional infrastructure (RabbitMQ) must not prevent startup.
+   Workers start only when `container.RabbitMQ != nil`.
+6. **Async Side Effects** — operations touching external systems (email, future webhooks) are
+   published to a queue and handled by workers — never blocking the HTTP response.
 
 ---
 
-## 5. Communication Patterns
+## 7. Adding a New Resource (Checklist)
 
-1. **Strong Typing Everywhere:** All data passing between layers (Transport → Service → Infrastructure) uses internal Domain structs.
-2. **Dependency Injection:** All dependencies (DB, Storage, Mailer, …) are passed via `New…` constructors.
-3. **Context Propagation:** `context.Context` is always threaded from the Gin handler down to GORM queries, `Mailer.Send`, and worker loops.
-4. **Ory Integration:** Kratos Admin API is accessed via typed SDK structs — no raw maps for identity traits.
-5. **Graceful Degradation:** Optional infrastructure (RabbitMQ) must not prevent startup on failure. Workers are only started when `container.RabbitMQ != nil`.
-6. **Async by default for side effects:** Operations that touch external systems (email, future webhooks) are published to a queue and handled by workers — never blocking the HTTP response.
+When introducing a new domain object (e.g. `Project`, `Asset`):
 
----
-
-## 6. Configuration Reference
-
-Relevant env vars for the Mailer (see `.env` and `config/config.go`):
-
-| Variable          | Default                     | Description                                     |
-|-------------------|-----------------------------|--------------------------------------------------|
-| `MAILER_FROM`     | `no-reply@studio.localhost` | Envelope sender address                          |
-| `MAILER_HOST`     | `localhost`                 | SMTP server hostname                             |
-| `MAILER_PORT`     | `1025`                      | `1025` = Mailhog, `587` = STARTTLS, `465` = TLS |
-| `MAILER_USERNAME` | —                           | Leave empty for Mailhog; set for real providers  |
-| `MAILER_PASSWORD` | —                           | SMTP auth password                               |
+- [ ] Add entity + repository interface + service interface to `internal/domain/<resource>.go`
+- [ ] Add sentinel errors to `domain/errors.go` if new failure modes are needed
+- [ ] Add message contracts to `domain/events.go` if async events are needed
+- [ ] Implement repository in `internal/infrastructure/db/<resource>_repository.go`
+- [ ] Add migration in `internal/infrastructure/db/migrations/`
+- [ ] Implement service in `internal/service/<resource>_service.go`
+- [ ] Add handler file(s) in `internal/transport/http/handlers/<resource>_handler.go`
+- [ ] Register routes in `internal/transport/http/router/router.go`
+- [ ] Wire in `cmd/serve.go`
+- [ ] Extend `utils/errors.go` mapper if new sentinel errors were added
 
 ---
 
-## 7. Technology Stack
+## 8. Configuration Reference
 
-| Concern       | Tool                                                                 |
-|---------------|----------------------------------------------------------------------|
-| CLI           | [Cobra](https://github.com/spf13/cobra)                             |
-| Web Framework | [Gin Gonic](https://github.com/gin-gonic/gin)                       |
-| ORM           | [GORM](https://gorm.io/)                                            |
-| Migrations    | [gormigrate](https://github.com/go-gormigrate/gormigrate)           |
-| Auth          | [Ory Kratos](https://www.ory.sh/kratos/) (Identity & Session)       |
-| Database      | PostgreSQL                                                           |
-| Storage       | MinIO (S3-compatible)                                               |
-| Mailer        | SMTP (`net/smtp` + `crypto/tls`) / Log (dev)                        |
-| Message Queue | RabbitMQ via [amqp091-go](https://github.com/rabbitmq/amqp091-go)  |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_DSN` | — | PostgreSQL DSN (required) |
+| `MAILER_FROM` | `no-reply@studio.localhost` | Envelope sender |
+| `MAILER_HOST` | `localhost` | SMTP hostname |
+| `MAILER_PORT` | `1025` | `1025`=Mailhog, `587`=STARTTLS, `465`=TLS |
+| `MAILER_USERNAME` | — | Empty = no auth (Mailhog) |
+| `MAILER_PASSWORD` | — | SMTP password |
+| `STORAGE_PUBLIC_BASE_URL` | — | Public URL prefix for asset links |
+| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/` | Optional; omit to disable |
+| `SERVER_DASHBOARD_URL` | `http://dashboard.studio.localhost` | Invite link base URL |
+
+---
+
+## 9. Technology Stack
+
+| Concern | Tool |
+|---------|------|
+| CLI | [Cobra](https://github.com/spf13/cobra) |
+| Web Framework | [Gin Gonic](https://github.com/gin-gonic/gin) |
+| ORM | [GORM](https://gorm.io/) |
+| Migrations | [gormigrate](https://github.com/go-gormigrate/gormigrate) |
+| Auth | [Ory Kratos](https://www.ory.sh/kratos/) |
+| Database | PostgreSQL |
+| Storage | MinIO (S3-compatible) |
+| Mailer | SMTP (`net/smtp` + `crypto/tls`) |
+| Message Queue | RabbitMQ via [amqp091-go](https://github.com/rabbitmq/amqp091-go) |

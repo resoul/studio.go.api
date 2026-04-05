@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/resoul/studio.go.api/internal/domain"
 	"github.com/resoul/studio.go.api/internal/infrastructure/rabbitmq"
 	"github.com/sirupsen/logrus"
+	"gorm.io/gorm"
 )
 
 const inviteQueue = "workspace.invites"
@@ -86,6 +88,9 @@ func (s *workspaceService) CreateWorkspace(ctx context.Context, input domain.Cre
 func (s *workspaceService) GetWorkspace(ctx context.Context, id uuid.UUID) (*domain.Workspace, error) {
 	ws, err := s.repo.FindByID(ctx, id)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("workspace %s: %w", id, domain.ErrNotFound)
+		}
 		return nil, err
 	}
 	if ws.LogoURL != "" {
@@ -117,7 +122,7 @@ func (s *workspaceService) ListForUser(ctx context.Context, userID string) ([]do
 	return workspaces, nil
 }
 
-// InviteUser persists the invite record and publishes an event to RabbitMQ.
+// InviteUser persists the invite record and publishes a domain.InviteEvent to RabbitMQ.
 // Email delivery is handled asynchronously by InviteWorker.
 // If RabbitMQ is unavailable the invite is still saved — email just won't be sent.
 func (s *workspaceService) InviteUser(ctx context.Context, input domain.CreateInviteInput) (*domain.WorkspaceInvite, error) {
@@ -150,8 +155,8 @@ func (s *workspaceService) ListInvites(ctx context.Context, workspaceID uuid.UUI
 	return s.repo.ListInvites(ctx, workspaceID)
 }
 
-// publishInviteEvent enqueues the email delivery task.
-// Failures are non-fatal — the invite record already exists.
+// publishInviteEvent enqueues the email delivery task using domain.InviteEvent.
+// Failures are non-fatal — the invite record already exists in the DB.
 func (s *workspaceService) publishInviteEvent(ctx context.Context, invite *domain.WorkspaceInvite, input domain.CreateInviteInput) {
 	if s.rbmq == nil {
 		logrus.WithField("token", invite.Token).Warn("RabbitMQ unavailable, invite email will not be sent")
@@ -164,19 +169,8 @@ func (s *workspaceService) publishInviteEvent(ctx context.Context, invite *domai
 		return
 	}
 
-	// InviteEvent mirrors worker.InviteEvent — defined here to avoid an import cycle.
-	// Both structs must stay in sync; consider moving to domain/ if they drift.
-	type inviteEvent struct {
-		Token         string `json:"token"`
-		WorkspaceID   string `json:"workspace_id"`
-		WorkspaceName string `json:"workspace_name"`
-		Email         string `json:"email"`
-		Role          string `json:"role"`
-		ExpiresAt     string `json:"expires_at"`
-		InviteBaseURL string `json:"invite_base_url"`
-	}
-
-	payload, err := json.Marshal(inviteEvent{
+	// domain.InviteEvent is the single source of truth — no local struct needed.
+	payload, err := json.Marshal(domain.InviteEvent{
 		Token:         invite.Token,
 		WorkspaceID:   invite.WorkspaceID.String(),
 		WorkspaceName: ws.Name,
@@ -205,10 +199,13 @@ func (s *workspaceService) publishInviteEvent(ctx context.Context, invite *domai
 func (s *workspaceService) PreviewInvite(ctx context.Context, token string) (*domain.Workspace, int64, error) {
 	invite, err := s.repo.GetInvite(ctx, token)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, 0, fmt.Errorf("invite %s: %w", token, domain.ErrNotFound)
+		}
 		return nil, 0, err
 	}
 	if time.Now().After(invite.ExpiresAt) {
-		return nil, 0, fmt.Errorf("invite expired")
+		return nil, 0, domain.ErrInviteExpired
 	}
 
 	ws := &invite.Workspace
@@ -228,10 +225,13 @@ func (s *workspaceService) PreviewInvite(ctx context.Context, token string) (*do
 func (s *workspaceService) AcceptInvite(ctx context.Context, token string, userID string) error {
 	invite, err := s.repo.GetInvite(ctx, token)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("invite %s: %w", token, domain.ErrNotFound)
+		}
 		return err
 	}
 	if time.Now().After(invite.ExpiresAt) {
-		return fmt.Errorf("invite expired")
+		return domain.ErrInviteExpired
 	}
 
 	member := &domain.WorkspaceMember{
@@ -264,7 +264,7 @@ func (s *workspaceService) GetCurrentWorkspace(ctx context.Context, userID strin
 			return nil, err
 		}
 		if len(workspaces) == 0 {
-			return nil, fmt.Errorf("user has no workspaces")
+			return nil, fmt.Errorf("user has no workspaces: %w", domain.ErrNotFound)
 		}
 		firstWS := workspaces[0]
 		if err := s.SetCurrentWorkspace(ctx, userID, firstWS.ID); err != nil {
@@ -296,6 +296,9 @@ func (s *workspaceService) GetCurrentConfig(ctx context.Context, userID string) 
 func (s *workspaceService) UpdateWorkspace(ctx context.Context, id uuid.UUID, input domain.UpdateWorkspaceInput) (*domain.Workspace, error) {
 	ws, err := s.repo.FindByID(ctx, id)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("workspace %s: %w", id, domain.ErrNotFound)
+		}
 		return nil, err
 	}
 	if input.Name != "" {
@@ -327,21 +330,15 @@ func (s *workspaceService) ListMembers(ctx context.Context, workspaceID uuid.UUI
 
 	result := make([]domain.MemberInfo, 0, len(members))
 	for _, m := range members {
-		info := domain.MemberInfo{
-			WorkspaceMember: m,
-		}
+		info := domain.MemberInfo{WorkspaceMember: m}
 
-		// Fetch profile
-		profile, err := s.profileRepo.FindByID(ctx, m.UserID)
-		if err == nil {
+		if profile, err := s.profileRepo.FindByID(ctx, m.UserID); err == nil {
 			info.FirstName = profile.FirstName
 			info.LastName = profile.LastName
 			info.AvatarURL = profile.AvatarURL
 		}
 
-		// Fetch email from Kratos
-		user, err := s.userRepo.GetIdentity(ctx, m.UserID)
-		if err == nil {
+		if user, err := s.userRepo.GetIdentity(ctx, m.UserID); err == nil {
 			info.Email = user.Email
 		}
 
@@ -352,31 +349,27 @@ func (s *workspaceService) ListMembers(ctx context.Context, workspaceID uuid.UUI
 }
 
 func (s *workspaceService) RemoveMember(ctx context.Context, workspaceID uuid.UUID, userID string) error {
-	// Check if target is owner
 	ws, err := s.repo.FindByID(ctx, workspaceID)
 	if err != nil {
 		return err
 	}
 	if ws.OwnerID == userID {
-		return fmt.Errorf("cannot remove workspace owner")
+		return domain.ErrOwnerCannotBeRemoved
 	}
-
 	return s.repo.DeleteMember(ctx, workspaceID, userID)
 }
 
 func (s *workspaceService) ResendInvite(ctx context.Context, workspaceID uuid.UUID, email string, baseURL string) (*domain.WorkspaceInvite, error) {
-	// Re-use InviteUser logic but first clean up old invite for this email in this workspace
 	_ = s.repo.DeleteInviteByEmail(ctx, workspaceID, email)
 
 	input := domain.CreateInviteInput{
 		WorkspaceID:   workspaceID,
 		Email:         email,
-		Role:          domain.RoleMember, // Default to member for resend? Or should we store role?
+		Role:          domain.RoleMember,
 		SendEmail:     true,
 		InviteBaseURL: baseURL,
 	}
 
-	// Try to find if there was a specific role before?
 	invites, _ := s.repo.ListInvites(ctx, workspaceID)
 	for _, inv := range invites {
 		if inv.Email == email {
