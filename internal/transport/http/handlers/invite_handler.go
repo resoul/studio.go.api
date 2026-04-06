@@ -24,6 +24,7 @@ type InvitePreviewResponse struct {
 	Name         string    `json:"name"`
 	LogoURL      string    `json:"logo_url"`
 	MembersCount int64     `json:"members_count"`
+	Email        string    `json:"email"`
 }
 
 func (h *WorkspaceHandler) GetInvitePreview(c *gin.Context) {
@@ -33,7 +34,7 @@ func (h *WorkspaceHandler) GetInvitePreview(c *gin.Context) {
 		return
 	}
 
-	ws, membersCount, err := h.service.PreviewInvite(c.Request.Context(), token)
+	ws, membersCount, invite, err := h.service.PreviewInvite(c.Request.Context(), token)
 	if err != nil {
 		utils.RespondMapped(c, err)
 		return
@@ -45,6 +46,7 @@ func (h *WorkspaceHandler) GetInvitePreview(c *gin.Context) {
 		Name:         ws.Name,
 		LogoURL:      ws.LogoURL,
 		MembersCount: membersCount,
+		Email:        invite.Email,
 	})
 }
 

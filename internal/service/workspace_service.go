@@ -196,16 +196,16 @@ func (s *workspaceService) publishInviteEvent(ctx context.Context, invite *domai
 	}
 }
 
-func (s *workspaceService) PreviewInvite(ctx context.Context, token string) (*domain.Workspace, int64, error) {
+func (s *workspaceService) PreviewInvite(ctx context.Context, token string) (*domain.Workspace, int64, *domain.WorkspaceInvite, error) {
 	invite, err := s.repo.GetInvite(ctx, token)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, 0, fmt.Errorf("invite %s: %w", token, domain.ErrNotFound)
+			return nil, 0, nil, fmt.Errorf("invite %s: %w", token, domain.ErrNotFound)
 		}
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	if time.Now().After(invite.ExpiresAt) {
-		return nil, 0, domain.ErrInviteExpired
+		return nil, 0, nil, domain.ErrInviteExpired
 	}
 
 	ws := &invite.Workspace
@@ -219,7 +219,7 @@ func (s *workspaceService) PreviewInvite(ctx context.Context, token string) (*do
 	}
 
 	count, _ := s.repo.CountMembers(ctx, ws.ID)
-	return ws, count, nil
+	return ws, count, invite, nil
 }
 
 func (s *workspaceService) AcceptInvite(ctx context.Context, token string, userID string) error {

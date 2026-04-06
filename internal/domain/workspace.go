@@ -115,7 +115,7 @@ type WorkspaceService interface {
 
 	InviteUser(ctx context.Context, input CreateInviteInput) (*WorkspaceInvite, error)
 	ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceInvite, error)
-	PreviewInvite(ctx context.Context, token string) (*Workspace, int64, error)
+	PreviewInvite(ctx context.Context, token string) (*Workspace, int64, *WorkspaceInvite, error)
 	AcceptInvite(ctx context.Context, token string, userID string) error
 
 	SetCurrentWorkspace(ctx context.Context, userID string, workspaceID uuid.UUID) error
