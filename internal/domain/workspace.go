@@ -71,6 +71,7 @@ type WorkspaceRepository interface {
 	DeleteInvite(ctx context.Context, token string) error
 	Update(ctx context.Context, ws *Workspace) error
 	ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceInvite, error)
+	ListPendingInvitesByEmail(ctx context.Context, email string, now time.Time) ([]WorkspaceInvite, error)
 
 	SetCurrentWorkspace(ctx context.Context, config *UserWorkspaceConfig) error
 	GetCurrentWorkspace(ctx context.Context, userID string) (*UserWorkspaceConfig, error)
@@ -115,6 +116,7 @@ type WorkspaceService interface {
 
 	InviteUser(ctx context.Context, input CreateInviteInput) (*WorkspaceInvite, error)
 	ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceInvite, error)
+	ListPendingInvitesForUser(ctx context.Context, userID string) ([]PendingWorkspaceInvite, error)
 	PreviewInvite(ctx context.Context, token string) (*Workspace, int64, *WorkspaceInvite, error)
 	AcceptInvite(ctx context.Context, token string, userID string) error
 
@@ -132,10 +134,22 @@ type WorkspaceService interface {
 
 type MemberInfo struct {
 	WorkspaceMember
-	Email     string `json:"email"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
-	AvatarURL string `json:"avatar_url"`
+	Email      string     `json:"email"`
+	FirstName  string     `json:"first_name"`
+	LastName   string     `json:"last_name"`
+	AvatarURL  string     `json:"avatar_url"`
+	LastSeenAt *time.Time `json:"last_seen_at"`
+}
+
+type PendingWorkspaceInvite struct {
+	Token         string        `json:"token"`
+	WorkspaceID   uuid.UUID     `json:"workspace_id"`
+	WorkspaceName string        `json:"workspace_name"`
+	WorkspaceSlug string        `json:"workspace_slug"`
+	WorkspaceLogo string        `json:"workspace_logo"`
+	Role          WorkspaceRole `json:"role"`
+	ExpiresAt     time.Time     `json:"expires_at"`
+	CreatedAt     time.Time     `json:"created_at"`
 }
 
 type Storage interface {

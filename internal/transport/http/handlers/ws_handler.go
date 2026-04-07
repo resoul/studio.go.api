@@ -22,11 +22,15 @@ var upgrader = websocket.Upgrader{
 }
 
 type WSHandler struct {
-	hub domain.PresenceHub
+	hub            domain.PresenceHub
+	profileService domain.ProfileService
 }
 
-func NewWSHandler(hub domain.PresenceHub) *WSHandler {
-	return &WSHandler{hub: hub}
+func NewWSHandler(hub domain.PresenceHub, profileService domain.ProfileService) *WSHandler {
+	return &WSHandler{
+		hub:            hub,
+		profileService: profileService,
+	}
 }
 
 func (h *WSHandler) HandleWS(c *gin.Context) {
@@ -59,6 +63,9 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 func (h *WSHandler) readPump(userID string, client *Client) {
 	defer func() {
 		h.hub.Unregister(context.Background(), userID, client)
+		if err := h.profileService.MarkLastSeen(context.Background(), userID); err != nil {
+			logrus.WithError(err).WithField("user_id", userID).Warn("failed to mark last seen")
+		}
 		client.conn.Close()
 	}()
 

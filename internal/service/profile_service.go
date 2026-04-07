@@ -97,3 +97,10 @@ func (s *profileService) EnsureProfileExists(ctx context.Context, userID string)
 	}
 	return profile, nil
 }
+
+func (s *profileService) MarkLastSeen(ctx context.Context, userID string) error {
+	if _, err := s.EnsureProfileExists(ctx, userID); err != nil {
+		return err
+	}
+	return s.repo.UpdateLastSeen(ctx, userID, time.Now())
+}

@@ -118,6 +118,8 @@ Business logic. Coordinates domain entities and repository/port interfaces.
 
 #### WorkspaceService
 - `InviteUser` — persists the invite, publishes a `domain.InviteEvent` to `workspace.invites`.
+- `AcceptInvite` — after adding the member, posts an automatic chat message in workspace `#general`
+  as the joining user: `joined #general.` (best-effort side effect; invite acceptance remains primary).
 - `RemoveMember` — returns `domain.ErrOwnerCannotBeRemoved` when target is the workspace owner.
 - If `*rabbitmq.Client` is `nil`, invite is saved but no event is published (graceful degradation).
 
@@ -151,6 +153,16 @@ Long-running background goroutines consuming RabbitMQ queues.
 #### Router (`router/router.go`)
 Single source of truth for all route definitions. Receives handler structs and `*config.Config`
 via constructor; returns a ready `*gin.Engine`. Adding a new endpoint means editing only this file.
+
+**Gin wildcard safety (required):**
+- Never register sibling routes that differ only by wildcard param name on the same path depth.
+  Example of **invalid/conflicting** pair in Gin:
+  - `/messages/:chat_id/...`
+  - `/messages/:message_id/...`
+- Disambiguate by adding a static segment:
+  - `/messages/:chat_id/...`
+  - `/reactions/:message_id`
+- After route changes, always do a startup-safe validation (`go build ./...` in the API project) to catch router panics before shipping.
 
 #### Handlers
 

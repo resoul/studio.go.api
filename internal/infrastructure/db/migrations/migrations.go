@@ -21,6 +21,8 @@ func All() []*gormigrate.Migration {
 					&domain.DirectMessageConversation{},
 					&domain.Message{},
 					&domain.ChannelMember{},
+					&domain.ConversationMember{},
+					&domain.MessageReaction{},
 				)
 			},
 			Rollback: func(tx *gorm.DB) error {
@@ -31,6 +33,8 @@ func All() []*gormigrate.Migration {
 					&domain.Profile{},
 					&domain.UserWorkspaceConfig{},
 					&domain.ChannelMember{},
+					&domain.ConversationMember{},
+					&domain.MessageReaction{},
 					&domain.Message{},
 					&domain.DirectMessageConversation{},
 					&domain.Channel{},

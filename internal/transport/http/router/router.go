@@ -54,7 +54,10 @@ func New(cfg *config.Config, profileHandler *handlers.ProfileHandler, workspaceH
 					chat.GET("/conversations", chatHandler.ListConversations)
 					chat.POST("/conversations", chatHandler.GetOrCreateConversation)
 					chat.GET("/messages/:chat_id", chatHandler.GetMessages) // changed from :id to :chat_id to avoid confusion with workspace :id
+					chat.GET("/messages/:chat_id/thread/:message_id", chatHandler.GetThreadMessages)
 					chat.POST("/messages/:chat_id", chatHandler.SendMessage)
+					chat.POST("/messages/:chat_id/read", chatHandler.MarkRead)
+					chat.POST("/reactions/:message_id", chatHandler.ToggleReaction)
 				}
 			}
 		}

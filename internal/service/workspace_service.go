@@ -25,6 +25,8 @@ type workspaceService struct {
 	profileRepo domain.ProfileRepository
 	userRepo    domain.UserRepository
 	storage     domain.Storage
+	chatService domain.ChatService
+	hub         domain.PresenceHub
 	rbmq        *rabbitmq.Client // optional — nil when RabbitMQ is unavailable
 }
 
@@ -33,6 +35,8 @@ func NewWorkspaceService(
 	profileRepo domain.ProfileRepository,
 	userRepo domain.UserRepository,
 	storage domain.Storage,
+	chatService domain.ChatService,
+	hub domain.PresenceHub,
 	rbmq *rabbitmq.Client,
 ) domain.WorkspaceService {
 	return &workspaceService{
@@ -40,6 +44,8 @@ func NewWorkspaceService(
 		profileRepo: profileRepo,
 		userRepo:    userRepo,
 		storage:     storage,
+		chatService: chatService,
+		hub:         hub,
 		rbmq:        rbmq,
 	}
 }
@@ -81,6 +87,9 @@ func (s *workspaceService) CreateWorkspace(ctx context.Context, input domain.Cre
 	if err := s.repo.AddMember(ctx, member); err != nil {
 		return nil, err
 	}
+
+	// Create self-DM conversation
+	_, _ = s.chatService.GetOrCreateConversation(ctx, wsID, input.OwnerID, input.OwnerID)
 
 	return ws, nil
 }
@@ -148,11 +157,63 @@ func (s *workspaceService) InviteUser(ctx context.Context, input domain.CreateIn
 		s.publishInviteEvent(ctx, invite, input)
 	}
 
+	if s.hub != nil {
+		s.hub.Broadcast(ctx, domain.WebsocketEvent{
+			Type: domain.WebsocketEventInvite,
+			Payload: domain.InviteNotificationEvent{
+				Type: "PENDING_INVITES_CHANGED",
+			},
+		})
+	}
+
 	return invite, nil
 }
 
 func (s *workspaceService) ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceInvite, error) {
 	return s.repo.ListInvites(ctx, workspaceID)
+}
+
+func (s *workspaceService) ListPendingInvitesForUser(ctx context.Context, userID string) ([]domain.PendingWorkspaceInvite, error) {
+	user, err := s.userRepo.GetIdentity(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	email := strings.TrimSpace(user.Email)
+	if email == "" {
+		return []domain.PendingWorkspaceInvite{}, nil
+	}
+
+	invites, err := s.repo.ListPendingInvitesByEmail(ctx, email, time.Now())
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]domain.PendingWorkspaceInvite, 0, len(invites))
+	for _, invite := range invites {
+		logoURL := invite.Workspace.LogoURL
+		if logoURL != "" {
+			presigned, presignErr := s.storage.GetPresignedURL(ctx, "workspaces", logoURL, time.Hour)
+			if presignErr != nil {
+				logrus.WithError(presignErr).WithField("object", logoURL).Warn("failed to presign pending invite workspace logo")
+			} else {
+				logoURL = fmt.Sprintf("%s?v=%d", presigned, invite.Workspace.UpdatedAt.Unix())
+			}
+		}
+
+		result = append(result, domain.PendingWorkspaceInvite{
+			Token:         invite.Token,
+			WorkspaceID:   invite.WorkspaceID,
+			WorkspaceName: invite.Workspace.Name,
+			WorkspaceSlug: invite.Workspace.Slug,
+			WorkspaceLogo: logoURL,
+			Role:          invite.Role,
+			ExpiresAt:     invite.ExpiresAt,
+			CreatedAt:     invite.CreatedAt,
+		})
+	}
+
+	return result, nil
 }
 
 // publishInviteEvent enqueues the email delivery task using domain.InviteEvent.
@@ -262,7 +323,45 @@ func (s *workspaceService) AcceptInvite(ctx context.Context, token string, userI
 		return err
 	}
 
+	// Create self-DM conversation
+	_, _ = s.chatService.GetOrCreateConversation(ctx, invite.WorkspaceID, userID, userID)
+	s.postJoinedGeneralMessage(ctx, invite.WorkspaceID, userID)
+
 	return s.repo.DeleteInvite(ctx, token)
+}
+
+func (s *workspaceService) postJoinedGeneralMessage(ctx context.Context, workspaceID uuid.UUID, userID string) {
+	channels, err := s.chatService.ListChannels(ctx, workspaceID, userID)
+	if err != nil {
+		logrus.WithError(err).
+			WithField("workspace_id", workspaceID).
+			WithField("user_id", userID).
+			Warn("failed to list channels for join message")
+		return
+	}
+
+	var generalChannelID uuid.UUID
+	for _, channel := range channels {
+		if strings.EqualFold(channel.Name, "general") {
+			generalChannelID = channel.ID
+			break
+		}
+	}
+
+	if generalChannelID == uuid.Nil {
+		logrus.WithField("workspace_id", workspaceID).
+			WithField("user_id", userID).
+			Warn("general channel not found for join message")
+		return
+	}
+
+	if _, err := s.chatService.SendMessage(ctx, userID, generalChannelID, "joined #general.", true, nil); err != nil {
+		logrus.WithError(err).
+			WithField("workspace_id", workspaceID).
+			WithField("user_id", userID).
+			WithField("channel_id", generalChannelID).
+			Warn("failed to post joined general message")
+	}
 }
 
 func (s *workspaceService) SetCurrentWorkspace(ctx context.Context, userID string, workspaceID uuid.UUID) error {
@@ -354,6 +453,7 @@ func (s *workspaceService) ListMembers(ctx context.Context, workspaceID uuid.UUI
 			info.FirstName = profile.FirstName
 			info.LastName = profile.LastName
 			info.AvatarURL = profile.AvatarURL
+			info.LastSeenAt = profile.LastSeenAt
 		}
 
 		if user, err := s.userRepo.GetIdentity(ctx, m.UserID); err == nil {

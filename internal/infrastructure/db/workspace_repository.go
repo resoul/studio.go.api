@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/resoul/studio.go.api/internal/domain"
@@ -114,6 +115,17 @@ func (r *workspaceRepository) Update(ctx context.Context, ws *domain.Workspace) 
 func (r *workspaceRepository) ListInvites(ctx context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceInvite, error) {
 	var invites []domain.WorkspaceInvite
 	err := r.db.WithContext(ctx).Where("workspace_id = ?", workspaceID).Order("created_at DESC").Find(&invites).Error
+	return invites, err
+}
+
+func (r *workspaceRepository) ListPendingInvitesByEmail(ctx context.Context, email string, now time.Time) ([]domain.WorkspaceInvite, error) {
+	var invites []domain.WorkspaceInvite
+	err := r.db.WithContext(ctx).
+		Preload("Workspace").
+		Where("LOWER(email) = LOWER(?)", email).
+		Where("expires_at > ?", now).
+		Order("created_at DESC").
+		Find(&invites).Error
 	return invites, err
 }
 

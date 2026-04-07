@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/resoul/studio.go.api/internal/domain"
 	"gorm.io/gorm"
@@ -29,4 +30,12 @@ func (r *profileRepository) Create(ctx context.Context, profile *domain.Profile)
 
 func (r *profileRepository) Update(ctx context.Context, profile *domain.Profile) error {
 	return r.db.WithContext(ctx).Save(profile).Error
+}
+
+func (r *profileRepository) UpdateLastSeen(ctx context.Context, id string, lastSeenAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&domain.Profile{}).
+		Where("id = ?", id).
+		Update("last_seen_at", lastSeenAt).
+		Error
 }

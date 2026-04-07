@@ -14,6 +14,16 @@ type ProfileHandler struct {
 	workspaceService domain.WorkspaceService
 }
 
+type userMeResponse struct {
+	Identity         *ory.Identity                   `json:"identity"`
+	Profile          *domain.Profile                 `json:"profile"`
+	Workspaces       []domain.Workspace              `json:"workspaces"`
+	Onboarded        bool                            `json:"onboarded"`
+	ProfileCompleted bool                            `json:"profile_completed"`
+	HasWorkspaces    bool                            `json:"has_workspaces"`
+	PendingInvites   []domain.PendingWorkspaceInvite `json:"pending_invites"`
+}
+
 func NewProfileHandler(profileService domain.ProfileService, workspaceService domain.WorkspaceService) *ProfileHandler {
 	return &ProfileHandler{
 		profileService:   profileService,
@@ -46,12 +56,23 @@ func (h *ProfileHandler) GetMe(c *gin.Context) {
 	}
 
 	workspaces, _ := h.workspaceService.ListForUser(c.Request.Context(), oryIdentity.Id)
+	pendingInvites, err := h.workspaceService.ListPendingInvitesForUser(c.Request.Context(), oryIdentity.Id)
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, "SNAKE_CASE_INTERNAL_ERROR", err.Error())
+		return
+	}
 
-	utils.RespondOK(c, gin.H{
-		"identity":   oryIdentity,
-		"profile":    profile,
-		"workspaces": workspaces,
-		"onboarded":  profile.Completed && len(workspaces) > 0,
+	hasWorkspaces := len(workspaces) > 0
+	profileCompleted := profile.Completed
+
+	utils.RespondOK(c, userMeResponse{
+		Identity:         oryIdentity,
+		Profile:          profile,
+		Workspaces:       workspaces,
+		Onboarded:        profileCompleted && hasWorkspaces,
+		ProfileCompleted: profileCompleted,
+		HasWorkspaces:    hasWorkspaces,
+		PendingInvites:   pendingInvites,
 	})
 }
 

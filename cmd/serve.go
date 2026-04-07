@@ -46,13 +46,13 @@ func serve(cmd *cobra.Command) {
 
 	// Services
 	profileSvc := service.NewProfileService(profileRepo, container.Storage)
-	workspaceSvc := service.NewWorkspaceService(workspaceRepo, profileRepo, userRepo, container.Storage, container.RabbitMQ)
 	chatSvc := service.NewChatService(chatRepo, container.Presence)
+	workspaceSvc := service.NewWorkspaceService(workspaceRepo, profileRepo, userRepo, container.Storage, chatSvc, container.Presence, container.RabbitMQ)
 
 	// Handlers
 	profileHandler := handlers.NewProfileHandler(profileSvc, workspaceSvc)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceSvc, cfg)
-	wsHandler := handlers.NewWSHandler(container.Presence)
+	wsHandler := handlers.NewWSHandler(container.Presence, profileSvc)
 	chatHandler := handlers.NewChatHandler(chatSvc)
 
 	// Start invite worker (async email delivery via RabbitMQ)
